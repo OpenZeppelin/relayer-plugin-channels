@@ -25,7 +25,10 @@
       "format:check": "prettier --check .",
       "test": "vitest run",
       "clean": "rm -rf dist",
-      "install-deps": "pnpm install --frozen-lockfile --ignore-scripts --prefer-offline"
+      "install-deps": "pnpm install --frozen-lockfile --ignore-scripts --prefer-offline",
+      "install-pnpm": "npm install -g pnpm",
+      "ci:version": "pnpm changeset version",
+      "release": "node ./scripts/release.js"
     },
     "repository": {
       "type": "git",
@@ -35,7 +38,8 @@
     "license": "MIT",
     "dependencies": {
       "@openzeppelin/relayer-sdk": "^1.6.0",
-      "@stellar/stellar-sdk": "^11.2.0"
+      "@stellar/stellar-sdk": "^11.2.0",
+      "@actions/exec": "^1.1.1"
     },
     "devDependencies": {
       "@changesets/cli": "^2.27.7",

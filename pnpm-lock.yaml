@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@actions/exec':
+        specifier: ^1.1.1
+        version: 1.1.1
       '@openzeppelin/relayer-sdk':
         specifier: ^1.6.0
         version: 1.6.0
@@ -50,6 +53,12 @@ importers:
         version: 4.0.4(@types/node@22.18.13)
 
 packages:
+
+  '@actions/exec@1.1.1':
+    resolution: {integrity: sha512-+sCcHHbVdk93a0XT19ECtO/gIXoxvdsgQLzb2fE2/5sIZmWQuluYyjPQtrtTHdU1YzTZ7bAPN4sITq2xi1679w==}
+
+  '@actions/io@1.1.3':
+    resolution: {integrity: sha512-wi9JjgKLYS7U/z8PPbco+PvTb/nRWjeoFlJ1Qer83k/3C5PHQi28hiVdeE2kHXmIL99mQFawx8qt/JPjZilJ8Q==}
 
   '@babel/runtime@7.28.4':
     resolution: {integrity: sha512-Q/N6JNWvIvPnLDvjlE1OUBLPQHH6l3CltCEsHIujp45zQUSSh8K+gHnaEX45yAT1nyngnINhvWtzN+Nb9D8RAQ==}
@@ -1610,6 +1619,12 @@ packages:
     engines: {node: '>=10'}
 
 snapshots:
+
+  '@actions/exec@1.1.1':
+    dependencies:
+      '@actions/io': 1.1.3
+
+  '@actions/io@1.1.3': {}
 
   '@babel/runtime@7.28.4': {}
 
