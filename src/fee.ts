@@ -23,9 +23,8 @@ export function calculateMaxFee(transaction: Transaction): number {
   }
 
   const baseInclusion = getRandomInt(FEE.MIN_BASE_FEE, FEE.MAX_BASE_FEE);
-  let dynamic = resourceFee > 0n
-    ? resourceFee + BigInt(baseInclusion)
-    : BigInt(FEE.RESOURCE_FEE_OFFSET + baseInclusion);
+  let dynamic =
+    resourceFee > 0n ? resourceFee + BigInt(baseInclusion) : BigInt(FEE.RESOURCE_FEE_OFFSET + baseInclusion);
 
   // Optional cap from env
   const cap = getMaxFee();
@@ -33,7 +32,9 @@ export function calculateMaxFee(transaction: Transaction): number {
     if (dynamic > BigInt(cap)) dynamic = BigInt(cap);
   }
 
-  console.log(`[channels] Calculated max_fee: ${Number(dynamic)} stroops (resourceFee: ${resourceFee}, baseInclusion: ${baseInclusion})`);
+  console.debug(
+    `[channels] Calculated max_fee: ${Number(dynamic)} stroops (resourceFee: ${resourceFee}, baseInclusion: ${baseInclusion})`
+  );
   return Number(dynamic);
 }
 
@@ -42,4 +43,3 @@ function getRandomInt(min: number, max: number): number {
   const mx = Math.floor(max);
   return Math.floor(Math.random() * (mx - mn + 1)) + mn;
 }
-

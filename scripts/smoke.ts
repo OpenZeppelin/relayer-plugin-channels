@@ -27,6 +27,7 @@
    --rpc-url (RPC_URL)             default: https://soroban-testnet.stellar.org
    --account-name (ACCOUNT_NAME)   default: test-account
    --contract-id (CONTRACT_ID)     optional: defaults to bundled smoke-contract contract id
+   --concurrency (CONCURRENCY)     optional: number of parallel requests per test (default: 1)
    --debug                         optional: print plugin logs/traces in responses
 */
 
@@ -136,6 +137,7 @@ async function main() {
   const accountName = String(args['account-name'] || process.env.ACCOUNT_NAME || 'test-account');
   const testId = (args['test-id'] || process.env.TEST_ID) as string | undefined;
   const debug = Boolean(args['debug'] || process.env.DEBUG);
+  const concurrency = parseInt(String(args['concurrency'] || process.env.CONCURRENCY || '1'), 10);
   const contractId = String(
     args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
   );
@@ -211,10 +213,50 @@ async function main() {
     console.error(`Unknown --test-id '${testId}'. Available: ${TESTS.map((t) => t.id).join(', ')}`);
     process.exit(1);
   }
-  for (const t of selected) {
-    console.log(`\n== ${t.id} :: ${t.label} ==`);
-    await t.run(ctx);
+
+  console.log('════════════════════════════════════════════════════════');
+  console.log('  Channels Plugin Smoke Tests');
+  console.log('════════════════════════════════════════════════════════\n');
+
+  const start = Date.now();
+
+  if (concurrency <= 1) {
+    // Sequential execution
+    for (const t of selected) {
+      console.log(`📋 ${t.label}...`);
+      await t.run(ctx);
+    }
+  } else {
+    // Parallel execution
+    console.log(`📊 Running ${selected.length} test${selected.length > 1 ? 's' : ''} with ${concurrency}x concurrency...\n`);
+    for (const t of selected) {
+      console.log(`📋 ${t.label} (x${concurrency} parallel)...`);
+      const testStart = Date.now();
+      const promises = Array.from({ length: concurrency }, (_, i) =>
+        t.run(ctx).then(
+          () => ({ index: i, success: true, error: null }),
+          (err) => ({ index: i, success: false, error: err })
+        )
+      );
+      const results = await Promise.all(promises);
+      const testElapsed = Date.now() - testStart;
+      const succeeded = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
+      console.log(`   ✓ Completed ${concurrency} requests in ${testElapsed}ms (${succeeded} succeeded, ${failed} failed)`);
+      if (failed > 0) {
+        console.log('   Errors:');
+        results.filter(r => !r.success).forEach(r => {
+          console.log(`     [${r.index}]: ${r.error?.message || r.error}`);
+        });
+      }
+      console.log('');
+    }
   }
+
+  const elapsed = Date.now() - start;
+  console.log('════════════════════════════════════════════════════════');
+  console.log(`✓ All tests completed in ${elapsed}ms`);
+  console.log('════════════════════════════════════════════════════════');
 }
 
 declare const fetch: any;
@@ -242,16 +284,14 @@ function printResult(label: string, envelope: any, debug: boolean) {
     return;
   }
   const data = envelope?.data || envelope?.result || {};
-  const minimal = {
-    success: envelope?.success ?? undefined,
-    data: data
-      ? {
-          transactionId: data.transactionId ?? data.id ?? null,
-          status: data.status ?? null,
-          hash: data.hash ?? null,
-        }
-      : null,
-    error: envelope?.error ?? null,
-  };
-  console.log(JSON.stringify(minimal, null, 2));
+  const hash = data?.hash;
+  const status = data?.status;
+  const success = envelope?.success;
+
+  if (success) {
+    console.log(`   ✓ ${label}: ${hash || status || 'confirmed'}`);
+  } else {
+    const error = envelope?.error || 'unknown error';
+    console.log(`   ✗ ${label}: ${error}`);
+  }
 }

@@ -2,6 +2,12 @@
 
 A plugin for OpenZeppelin Relayer that enables parallel transaction submission on Stellar using channel accounts with fee bumping. Channel accounts provide unique sequence numbers for parallel transaction submission, preventing sequence number conflicts.
 
+## Quick Start
+
+**Want to get started quickly?** Check out the [Channels Plugin Example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/channels-plugin-example) which includes a pre-configured relayer setup, Docker Compose configuration, and step-by-step instructions. This is the fastest way to get the Channels plugin up and running.
+
+For manual installation and configuration details, continue reading below.
+
 ## Prerequisites
 
 - Node.js >= 18
@@ -17,6 +23,8 @@ The Channels plugin can be added to any OpenZeppelin Relayer in two ways:
 ```bash
 # From the root of your Relayer repository
 cd plugins
+mkdir channels
+cd channels
 pnpm add @openzeppelin/relayer-plugin-channels
 ```
 
@@ -62,6 +70,101 @@ mkdir -p plugins/channels
 export { handler } from '@openzeppelin/relayer-plugin-channels';
 ```
 
+### Configure the Relayer
+
+Before setting environment variables, you need to configure your Relayer's `config.json` with the fund account and channel accounts. Create or update your `config/config.json`:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "channels-fund",
+      "name": "Channels Fund Account",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channels-fund-signer",
+      "policies": {
+        "concurrent_transactions": true
+      }
+    },
+    {
+      "id": "channel-001",
+      "name": "Channel Account 001",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channel-001-signer"
+    },
+    {
+      "id": "channel-002",
+      "name": "Channel Account 002",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "channel-002-signer"
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "channels-fund-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channels-fund.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_FUND"
+        }
+      }
+    },
+    {
+      "id": "channel-001-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channel-001.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_CHANNEL_001"
+        }
+      }
+    },
+    {
+      "id": "channel-002-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/channel-002.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_CHANNEL_002"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "channels",
+      "path": "channel/index.ts",
+      "timeout": 30,
+      "emit_logs": true,
+      "emit_traces": true
+    }
+  ]
+}
+```
+
+**Important Configuration Notes:**
+
+- **Fund Account** (`channels-fund`): Must have `"concurrent_transactions": true` in policies to enable parallel transaction processing
+- **Channel Accounts**: Create at least 2 for better throughput (you can add more as `channel-003`, etc.)
+- **Network**: Use `testnet` for testing or `mainnet` for production
+- **Signers**: Each relayer references a signer by `signer_id`, and signers are defined separately with keystore paths
+- **Keystore Files**: You'll need to create keystore files for each account - see [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer) for details on creating and managing keys
+- **Plugin Registration**: The `path` points to your plugin wrapper file relative to the plugins directory
+
+For more details on Relayer configuration, see the [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer).
+
 ### Configure Environment Variables
 
 Set the required environment variables for the plugin:
@@ -74,7 +177,7 @@ export FUND_RELAYER_ID="channels-fund"
 export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 
 # Optional environment variables
-export LOCK_TTL_SECONDS=30              # default: 30, min: 10, max: 30
+export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 export MAX_FEE=1000000                  # default: 1,000,000 stroops
 ```
 
@@ -83,8 +186,8 @@ Your Relayer should now contain:
 ```
 relayer/
 └─ plugins/
-   ├─ package.json              # lists the dependency
    └─ channels/
+      ├─ package.json           # lists the dependency
       └─ index.ts
 ```
 
@@ -142,24 +245,6 @@ The Channels plugin accepts Soroban operations and handles all the complexity of
 - **Fund Account**: Holds funds and pays for fee bumps
 - **Channel Accounts**: Provide unique sequence numbers for parallel transaction submission
 - The channel account is the transaction source and signer; the fund account wraps it in a fee bump
-
-## Configuration
-
-The Channels plugin is configured through environment variables:
-
-**Required Environment Variables:**
-
-- `STELLAR_NETWORK`: Either "testnet" or "mainnet"
-- `SOROBAN_RPC_URL`: Stellar Soroban RPC endpoint
-- `FUND_RELAYER_ID`: Relayer ID for the account that pays fees
-- `PLUGIN_ADMIN_SECRET`: Secret for accessing the management API
-
-**Optional Environment Variables:**
-
-- `LOCK_TTL_SECONDS`: TTL for channel account locks (default: 30, range: 10-30)
-- `MAX_FEE`: Cap for max_fee calculation (default: 1,000,000 stroops)
-
-**Note:** Channel accounts are managed dynamically through the Management API (see below).
 
 ## Management API
 
@@ -334,7 +419,7 @@ Plugin error example:
 
 - **Key**: `<network>:channel:in-use:<relayerId>`
 - **Value**: `{ token: string, lockedAt: ISOString }`
-- **TTL**: Configured by `LOCK_TTL_SECONDS`
+- **TTL**: Configured by `LOCK_TTL_SECONDS`.
 
 ## Error Codes
 

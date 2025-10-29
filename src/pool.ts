@@ -19,63 +19,68 @@ type MembershipDoc = { relayerIds: string[] };
 export class ChannelPool {
   private readonly network: 'testnet' | 'mainnet';
   private readonly globalLockKey: string;
-  private readonly lockTtlSec: number;
+  private readonly channelLockTtlSec: number;
+  private readonly mutexTtlSec: number;
   private readonly kv: PluginKVStore;
 
   constructor(network: 'testnet' | 'mainnet', kv: PluginKVStore) {
     this.network = network;
     this.kv = kv;
     this.globalLockKey = `${this.network}:channel-pool-lock`;
-    this.lockTtlSec = getLockTtlSeconds();
+    this.channelLockTtlSec = getLockTtlSeconds();
+    this.mutexTtlSec = POOL.MUTEX_TTL_SECONDS;
   }
 
   /** Acquire a relayerId with a token lock */
   async acquire(): Promise<PoolLock> {
-    const result = await this.kv.withLock<PoolLock | null>(
-      this.globalLockKey,
-      async () => {
-        const ids = await this.getRelayerIdsFromKV();
-        if (ids.length === 0) {
-          return null;
-        }
-
-        // Shuffle for basic fairness
-        shuffle(ids);
-
-        for (const relayerId of ids) {
-          const key = this.lockKey(relayerId);
-          const exists = await this.kv.exists(key);
-          if (exists) continue;
-
-          const token = randomToken();
-          const entry = { token, lockedAt: new Date().toISOString() };
-          await this.kv.set(key, entry, { ttlSec: this.lockTtlSec });
-          return { relayerId, token };
-        }
-        return null;
-      },
-      { ttlSec: POOL.LOCK_TTL_SECONDS },
-    );
-
-    if (!result) {
-      // Check if no channel accounts were configured at all
-      const ids = await this.getRelayerIdsFromKV();
-      if (ids.length === 0) {
-        throw pluginError(
-          'No channel accounts configured. Use the management API to set channel accounts.',
-          {
-            code: 'NO_CHANNELS_CONFIGURED',
-            status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-          },
-        );
+    const maxSpins = POOL.MUTEX_MAX_SPINS;
+    for (let i = 0; i < maxSpins; i++) {
+      const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer());
+      if (r === null) {
+        const jitter =
+          POOL.MUTEX_RETRY_MIN_MS +
+          Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
+        await sleep(jitter);
+        continue;
       }
-      throw pluginError('Too many transactions queued. Please try again later', {
-        code: 'POOL_CAPACITY',
+      return r;
+    }
+    throw pluginError('Too many transactions queued. Please try again later', {
+      code: 'POOL_CAPACITY',
+      status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+    });
+  }
+
+  // Run a function under the short-lived global mutex; returns null if busy
+  private async withGlobalMutex<T>(fn: () => Promise<T>): Promise<T | null> {
+    const r = (await (this.kv as any).withLock(
+      this.globalLockKey,
+      fn,
+      { ttlSec: this.mutexTtlSec, onBusy: 'skip' },
+    )) as T | null;
+    return r;
+  }
+
+  // Inside the mutex: pick an available relayer and set its channel lock
+  private async tryLockAnyRelayer(): Promise<PoolLock | null> {
+    const ids = await this.getRelayerIdsFromKV();
+    if (ids.length === 0) {
+      throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
+        code: 'NO_CHANNELS_CONFIGURED',
         status: HTTP_STATUS.SERVICE_UNAVAILABLE,
       });
     }
-
-    return result;
+    shuffle(ids);
+    for (const relayerId of ids) {
+      const key = this.lockKey(relayerId);
+      const exists = await this.kv.exists(key);
+      if (exists) continue;
+      const token = randomToken();
+      const entry = { token, lockedAt: new Date().toISOString() };
+      await this.kv.set(key, entry, { ttlSec: this.channelLockTtlSec });
+      return { relayerId, token };
+    }
+    return null;
   }
 
   /** Release the lock if we own it */
@@ -129,4 +134,8 @@ function randomToken(): string {
 
 function normalizeId(id: string): string {
   return String(id).trim().toLowerCase();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

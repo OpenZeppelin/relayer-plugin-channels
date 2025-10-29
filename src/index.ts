@@ -6,7 +6,7 @@
  */
 
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
-import type { Relayer } from '@openzeppelin/relayer-sdk';
+import type { PluginAPI, Relayer } from '@openzeppelin/relayer-sdk';
 import { PoolLock, ChannelPool } from './pool';
 import { loadConfig, getNetworkPassphrase } from './config';
 import { ChannelAccountsResponse } from './types';
@@ -24,7 +24,7 @@ async function handleXdrSubmit(
   fundRelayer: Relayer,
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
-  api: any,
+  api: PluginAPI
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
   const validated = validateExistingTransactionForSubmitOnly(tx);
@@ -35,20 +35,20 @@ async function handleXdrSubmit(
 async function handleFuncAuthSubmit(
   func: xdr.HostFunction,
   auth: xdr.SorobanAuthorizationEntry[],
-  api: PluginContext['api'],
+  api: PluginAPI,
   pool: ChannelPool,
   fundRelayer: Relayer,
   fundAddress: string,
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
-  rpc: SorobanRpc.Server,
+  rpc: SorobanRpc.Server
 ): Promise<ChannelAccountsResponse> {
   let poolLock: PoolLock | undefined;
   try {
     poolLock = await pool.acquire();
     const channelRelayer = api.useRelayer(poolLock.relayerId);
     const channelInfo = await channelRelayer.getRelayer();
-    console.log(`[channels] Acquired channel: ${poolLock.relayerId}, address: ${channelInfo?.address}`);
+    console.log(`[channels] Acquired channel: ${poolLock.relayerId}`);
     if (!channelInfo || !channelInfo.address) {
       throw pluginError('Channel relayer not found', {
         code: 'RELAYER_UNAVAILABLE',
@@ -71,7 +71,7 @@ async function handleFuncAuthSubmit(
       { address: channelInfo.address, sequence: channelStatus.sequence_number },
       fundAddress,
       rpc,
-      networkPassphrase,
+      networkPassphrase
     );
 
     const signedTx = await signWithChannelAndFund(
@@ -80,11 +80,11 @@ async function handleFuncAuthSubmit(
       fundRelayer,
       channelInfo.address,
       fundAddress,
-      networkPassphrase,
+      networkPassphrase
     );
 
     const maxFee = calculateMaxFee(signedTx);
-    return submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api);
+    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api);
   } finally {
     if (poolLock) {
       await pool.release(poolLock);
@@ -109,7 +109,9 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   try {
     // 1. Validate and parse request (xdr OR func+auth)
     const request = validateAndParseRequest(params);
-    console.log(`[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`);
+    console.debug(
+      `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
+    );
 
     // 2. Get fund relayer
     const fundRelayer = api.useRelayer(config.fundRelayerId);
@@ -146,7 +148,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       fundInfo.address,
       config.network,
       networkPassphrase,
-      rpc,
+      rpc
     );
   } finally {
     // Nothing to cleanup here; func-auth path releases locks internally

@@ -27,6 +27,6 @@ describe('ChannelPool', () => {
     const kv = new FakeKV();
     const pool = new ChannelPool('testnet', kv as any);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: [] });
-    await expect(pool.acquire()).rejects.toThrow('Too many transactions queued');
+    await expect(pool.acquire()).rejects.toThrow('No channel accounts configured');
   });
 });

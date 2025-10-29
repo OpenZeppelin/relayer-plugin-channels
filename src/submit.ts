@@ -5,7 +5,13 @@
  */
 
 import { Transaction } from '@stellar/stellar-sdk';
-import { pluginError, Relayer, SignTransactionResponseStellar, StellarTransactionResponse } from '@openzeppelin/relayer-sdk';
+import {
+  pluginError,
+  Relayer,
+  SignTransactionResponseStellar,
+  StellarTransactionResponse,
+  PluginAPI,
+} from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS } from './constants';
 import { ChannelAccountsResponse } from './types';
 
@@ -21,10 +27,10 @@ export async function signWithChannelAndFund(
   _fundRelayer: Relayer,
   channelAddress: string,
   _fundAddress: string,
-  networkPassphrase: string,
+  networkPassphrase: string
 ): Promise<Transaction> {
   const txXdr = transaction.toXDR();
-  console.log(`[channels] Signing transaction with channel (${channelAddress})`);
+  console.debug(`[channels] Signing transaction with channel (${channelAddress})`);
 
   // Get signatures from both accounts sequentially
   // Channel signs first
@@ -42,7 +48,7 @@ export async function signWithChannelAndFund(
   // Add both signatures to the transaction
   const signedTx = new Transaction(txXdr, networkPassphrase);
   signedTx.addSignature(channelAddress, channelSignResult.signature);
-  console.log(`[channels] Transaction signed: ${signedTx.signatures.length} signature(s) added`);
+  console.debug(`[channels] Transaction signed: ${signedTx.signatures.length} signature(s) added`);
 
   return signedTx;
 }
@@ -55,20 +61,25 @@ export async function submitWithFeeBumpAndWait(
   signedXdr: string,
   network: 'testnet' | 'mainnet',
   maxFee: number,
-  api: any,
+  api: PluginAPI
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
-  const submission = await fundRelayer.sendTransaction({
+  console.debug(
+    `[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`
+  );
+  const payload = {
     network,
     transaction_xdr: signedXdr,
     fee_bump: true,
     max_fee: maxFee,
-  });
+  } as const;
+  console.debug(`[channels] Relayer payload: ${JSON.stringify(payload)}`);
+  const submission = await fundRelayer.sendTransaction(payload);
 
   // Wait for confirmation
   try {
     const final = (await api.transactionWait(submission, {
-      interval: 1000,
+      interval: 500,
       timeout: 25000,
     })) as StellarTransactionResponse;
 

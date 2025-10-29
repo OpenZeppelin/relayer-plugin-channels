@@ -21,10 +21,12 @@ export async function simulateAndBuildWithChannel(
   channel: ChannelAccount,
   _fundAddress: string,
   rpc: SorobanRpc.Server,
-  networkPassphrase: string,
+  networkPassphrase: string
 ): Promise<Transaction> {
   const now = Math.floor(Date.now() / 1000);
-  console.log(`[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${auth?.length ?? 0}`);
+  console.debug(
+    `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${auth?.length ?? 0}`
+  );
 
   // Build inner transaction (source = channel, op source = fund)
   const transaction = new TransactionBuilder(new Account(channel.address, channel.sequence), {
@@ -37,7 +39,7 @@ export async function simulateAndBuildWithChannel(
         func,
         auth,
         // No explicit source: default to transaction source (channel account)
-      }),
+      })
     )
     .build();
 
@@ -45,7 +47,7 @@ export async function simulateAndBuildWithChannel(
   try {
     const prepared = await rpc.prepareTransaction(transaction);
     const resourceFee = prepared.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
-    console.log(`[channels] Simulation complete: resourceFee=${resourceFee}`);
+    console.debug(`[channels] Simulation complete: resourceFee=${resourceFee}`);
     return prepared as Transaction;
   } catch (e: any) {
     throw pluginError('Simulation failed', {

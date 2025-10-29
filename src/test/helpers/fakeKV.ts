@@ -34,13 +34,19 @@ export class FakeKV implements PluginKVStore {
     return v !== null && v !== undefined;
   }
 
-  async withLock<T>(key: string, fn: () => Promise<T>, _opts?: { ttlSec?: number }): Promise<T> {
+  async withLock<T>(
+    key: string,
+    fn: () => Promise<T>,
+    opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }
+  ): Promise<T | null> {
     // Simple, non-reentrant lock for testing; not robust
     if (await this.exists(key)) {
-      // simulate lock contention by waiting a tick
-      await new Promise((r) => setTimeout(r, 0));
+      if (opts?.onBusy === 'skip') return null;
+      throw new Error('lock busy');
     }
-    await this.set(key, { token: 'lock' }, { ttlSec: 1 });
+    // Respect requested TTL to better emulate production behavior
+    const ttl = opts?.ttlSec && opts.ttlSec > 0 ? opts.ttlSec : 1;
+    await this.set(key, { token: 'lock' }, { ttlSec: ttl });
     try {
       return await fn();
     } finally {

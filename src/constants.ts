@@ -26,7 +26,12 @@ export const CONFIG = {
 
 // Pool Constants
 export const POOL = {
-  LOCK_TTL_SECONDS: 10,
+  // TTL for the short global mutex guarding acquire()
+  MUTEX_TTL_SECONDS: 1,
+  // Retry policy when mutex is busy
+  MUTEX_MAX_SPINS: 30,
+  MUTEX_RETRY_MIN_MS: 10,
+  MUTEX_RETRY_MAX_MS: 30,
 } as const;
 
 // Time Constants
@@ -48,7 +53,6 @@ export const POLLING = {
   TIMEOUT_MS: 25000,
 } as const;
 
-// Dynamic fee knobs
 export const FEE = {
   MIN_BASE_FEE: 205,
   MAX_BASE_FEE: 605,
