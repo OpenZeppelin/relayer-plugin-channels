@@ -1,0 +1,6 @@
+config.json
+!.changeset/config.json
+node_modules/
+dist/
+.pool-locks/
+contracts/**/target/
