@@ -24,7 +24,8 @@
       "format": "prettier --write .",
       "format:check": "prettier --check .",
       "test": "vitest run",
-      "clean": "rm -rf dist"
+      "clean": "rm -rf dist",
+      "install-deps": "pnpm install --frozen-lockfile --ignore-scripts --prefer-offline"
     },
     "repository": {
       "type": "git",
