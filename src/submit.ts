@@ -4,16 +4,16 @@
  * Signing and submission logic for channel account transactions.
  */
 
-import { Transaction } from '@stellar/stellar-sdk';
+import { Transaction } from "@stellar/stellar-sdk";
 import {
   pluginError,
   Relayer,
   SignTransactionResponseStellar,
   StellarTransactionResponse,
   PluginAPI,
-} from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS } from './constants';
-import { ChannelAccountsResponse } from './types';
+} from "@openzeppelin/relayer-sdk";
+import { HTTP_STATUS } from "./constants";
+import { ChannelAccountsResponse } from "./types";
 
 /**
  * Sign transaction with both channel and fund relayers
@@ -27,10 +27,12 @@ export async function signWithChannelAndFund(
   _fundRelayer: Relayer,
   channelAddress: string,
   _fundAddress: string,
-  networkPassphrase: string
+  networkPassphrase: string,
 ): Promise<Transaction> {
   const txXdr = transaction.toXDR();
-  console.debug(`[channels] Signing transaction with channel (${channelAddress})`);
+  console.debug(
+    `[channels] Signing transaction with channel (${channelAddress})`,
+  );
 
   // Get signatures from both accounts sequentially
   // Channel signs first
@@ -39,8 +41,8 @@ export async function signWithChannelAndFund(
   });
 
   if (!isSignTransactionResponseStellar(channelSignResult)) {
-    throw pluginError('Invalid channel signature response', {
-      code: 'INVALID_SIGNATURE',
+    throw pluginError("Invalid channel signature response", {
+      code: "INVALID_SIGNATURE",
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
     });
   }
@@ -48,7 +50,9 @@ export async function signWithChannelAndFund(
   // Add both signatures to the transaction
   const signedTx = new Transaction(txXdr, networkPassphrase);
   signedTx.addSignature(channelAddress, channelSignResult.signature);
-  console.debug(`[channels] Transaction signed: ${signedTx.signatures.length} signature(s) added`);
+  console.debug(
+    `[channels] Transaction signed: ${signedTx.signatures.length} signature(s) added`,
+  );
 
   return signedTx;
 }
@@ -59,13 +63,13 @@ export async function signWithChannelAndFund(
 export async function submitWithFeeBumpAndWait(
   fundRelayer: Relayer,
   signedXdr: string,
-  network: 'testnet' | 'mainnet',
+  network: "testnet" | "mainnet",
   maxFee: number,
-  api: PluginAPI
+  api: PluginAPI,
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
   console.debug(
-    `[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`
+    `[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`,
   );
   const payload = {
     network,
@@ -84,9 +88,9 @@ export async function submitWithFeeBumpAndWait(
     })) as StellarTransactionResponse;
 
     // Check if transaction actually succeeded
-    if (final.status === 'failed') {
-      throw pluginError(final.status_reason || 'Transaction failed', {
-        code: 'ONCHAIN_FAILED',
+    if (final.status === "failed") {
+      throw pluginError(final.status_reason || "Transaction failed", {
+        code: "ONCHAIN_FAILED",
         status: HTTP_STATUS.BAD_REQUEST,
         details: {
           status: String(final.status),
@@ -104,13 +108,13 @@ export async function submitWithFeeBumpAndWait(
     };
   } catch (error: any) {
     // If it's already a pluginError with ONCHAIN_FAILED, rethrow it
-    if (error.code === 'ONCHAIN_FAILED') {
+    if (error.code === "ONCHAIN_FAILED") {
       throw error;
     }
 
     // Otherwise, it's a timeout
-    throw pluginError('Transaction wait timeout. It may still submit.', {
-      code: 'WAIT_TIMEOUT',
+    throw pluginError("Transaction wait timeout. It may still submit.", {
+      code: "WAIT_TIMEOUT",
       status: HTTP_STATUS.GATEWAY_TIMEOUT,
       details: {
         id: submission.id,
@@ -123,6 +127,13 @@ export async function submitWithFeeBumpAndWait(
 /**
  * Type guard for SignTransactionResponseStellar
  */
-function isSignTransactionResponseStellar(data: unknown): data is SignTransactionResponseStellar {
-  return data !== null && typeof data === 'object' && 'signature' in data && 'signedXdr' in data;
+function isSignTransactionResponseStellar(
+  data: unknown,
+): data is SignTransactionResponseStellar {
+  return (
+    data !== null &&
+    typeof data === "object" &&
+    "signature" in data &&
+    "signedXdr" in data
+  );
 }

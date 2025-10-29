@@ -5,31 +5,37 @@
  * Orchestrates the transaction processing pipeline using channel accounts with fee bumping.
  */
 
-import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
-import type { PluginAPI, Relayer } from '@openzeppelin/relayer-sdk';
-import { PoolLock, ChannelPool } from './pool';
-import { loadConfig, getNetworkPassphrase } from './config';
-import { ChannelAccountsResponse } from './types';
-import { validateAndParseRequest } from './validation';
-import { isManagementRequest, handleManagement } from './management';
-import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
-import { HTTP_STATUS } from './constants';
-import { Transaction, SorobanRpc, xdr } from '@stellar/stellar-sdk';
-import { simulateAndBuildWithChannel } from './simulation';
-import { calculateMaxFee } from './fee';
-import { validateExistingTransactionForSubmitOnly } from './tx';
+import { PluginContext, pluginError } from "@openzeppelin/relayer-sdk";
+import type { PluginAPI, Relayer } from "@openzeppelin/relayer-sdk";
+import { PoolLock, ChannelPool } from "./pool";
+import { loadConfig, getNetworkPassphrase } from "./config";
+import { ChannelAccountsResponse } from "./types";
+import { validateAndParseRequest } from "./validation";
+import { isManagementRequest, handleManagement } from "./management";
+import { signWithChannelAndFund, submitWithFeeBumpAndWait } from "./submit";
+import { HTTP_STATUS } from "./constants";
+import { Transaction, SorobanRpc, xdr } from "@stellar/stellar-sdk";
+import { simulateAndBuildWithChannel } from "./simulation";
+import { calculateMaxFee } from "./fee";
+import { validateExistingTransactionForSubmitOnly } from "./tx";
 
 async function handleXdrSubmit(
   xdrStr: string,
   fundRelayer: Relayer,
-  network: 'testnet' | 'mainnet',
+  network: "testnet" | "mainnet",
   networkPassphrase: string,
-  api: PluginAPI
+  api: PluginAPI,
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
   const validated = validateExistingTransactionForSubmitOnly(tx);
   const maxFee = calculateMaxFee(validated);
-  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api);
+  return submitWithFeeBumpAndWait(
+    fundRelayer,
+    validated.toXDR(),
+    network,
+    maxFee,
+    api,
+  );
 }
 
 async function handleFuncAuthSubmit(
@@ -39,9 +45,9 @@ async function handleFuncAuthSubmit(
   pool: ChannelPool,
   fundRelayer: Relayer,
   fundAddress: string,
-  network: 'testnet' | 'mainnet',
+  network: "testnet" | "mainnet",
   networkPassphrase: string,
-  rpc: SorobanRpc.Server
+  rpc: SorobanRpc.Server,
 ): Promise<ChannelAccountsResponse> {
   let poolLock: PoolLock | undefined;
   try {
@@ -50,18 +56,21 @@ async function handleFuncAuthSubmit(
     const channelInfo = await channelRelayer.getRelayer();
     console.log(`[channels] Acquired channel: ${poolLock.relayerId}`);
     if (!channelInfo || !channelInfo.address) {
-      throw pluginError('Channel relayer not found', {
-        code: 'RELAYER_UNAVAILABLE',
+      throw pluginError("Channel relayer not found", {
+        code: "RELAYER_UNAVAILABLE",
         status: HTTP_STATUS.BAD_GATEWAY,
         details: { relayerId: poolLock.relayerId },
       });
     }
     const channelStatus = await channelRelayer.getRelayerStatus();
-    if (channelStatus.network_type !== 'stellar') {
-      throw pluginError('Channel relayer network type must be stellar', {
-        code: 'UNSUPPORTED_NETWORK',
+    if (channelStatus.network_type !== "stellar") {
+      throw pluginError("Channel relayer network type must be stellar", {
+        code: "UNSUPPORTED_NETWORK",
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { network_type: channelStatus.network_type, relayerId: poolLock.relayerId },
+        details: {
+          network_type: channelStatus.network_type,
+          relayerId: poolLock.relayerId,
+        },
       });
     }
 
@@ -71,7 +80,7 @@ async function handleFuncAuthSubmit(
       { address: channelInfo.address, sequence: channelStatus.sequence_number },
       fundAddress,
       rpc,
-      networkPassphrase
+      networkPassphrase,
     );
 
     const signedTx = await signWithChannelAndFund(
@@ -80,11 +89,17 @@ async function handleFuncAuthSubmit(
       fundRelayer,
       channelInfo.address,
       fundAddress,
-      networkPassphrase
+      networkPassphrase,
     );
 
     const maxFee = calculateMaxFee(signedTx);
-    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api);
+    return await submitWithFeeBumpAndWait(
+      fundRelayer,
+      signedTx.toXDR(),
+      network,
+      maxFee,
+      api,
+    );
   } finally {
     if (poolLock) {
       await pool.release(poolLock);
@@ -92,7 +107,9 @@ async function handleFuncAuthSubmit(
   }
 }
 
-async function channelAccounts(context: PluginContext): Promise<ChannelAccountsResponse> {
+async function channelAccounts(
+  context: PluginContext,
+): Promise<ChannelAccountsResponse> {
   const { api, kv, params } = context;
 
   // Management branch: handle and return immediately
@@ -110,32 +127,41 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     // 1. Validate and parse request (xdr OR func+auth)
     const request = validateAndParseRequest(params);
     console.debug(
-      `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
+      `[channels] Request type: ${request.type}, auth entries: ${request.type === "func-auth" ? request.auth.length : "N/A"}`,
     );
 
     // 2. Get fund relayer
     const fundRelayer = api.useRelayer(config.fundRelayerId);
     const fundInfo = await fundRelayer.getRelayer();
     if (!fundInfo || !fundInfo.address) {
-      throw pluginError('Fund relayer not found', {
-        code: 'RELAYER_UNAVAILABLE',
+      throw pluginError("Fund relayer not found", {
+        code: "RELAYER_UNAVAILABLE",
         status: HTTP_STATUS.BAD_GATEWAY,
         details: { relayerId: config.fundRelayerId },
       });
     }
     const fundStatus = await fundRelayer.getRelayerStatus();
-    if (fundStatus.network_type !== 'stellar') {
-      throw pluginError('Fund relayer network type must be stellar', {
-        code: 'UNSUPPORTED_NETWORK',
+    if (fundStatus.network_type !== "stellar") {
+      throw pluginError("Fund relayer network type must be stellar", {
+        code: "UNSUPPORTED_NETWORK",
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { network_type: fundStatus.network_type, relayerId: config.fundRelayerId },
+        details: {
+          network_type: fundStatus.network_type,
+          relayerId: config.fundRelayerId,
+        },
       });
     }
 
     // 3. Branch by request type
-    if (request.type === 'xdr') {
+    if (request.type === "xdr") {
       console.log(`[channels] Flow: XDR submit-only`);
-      return await handleXdrSubmit(request.xdr, fundRelayer as Relayer, config.network, networkPassphrase, api);
+      return await handleXdrSubmit(
+        request.xdr,
+        fundRelayer as Relayer,
+        config.network,
+        networkPassphrase,
+        api,
+      );
     }
 
     console.log(`[channels] Flow: func+auth with channel account`);
@@ -148,7 +174,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       fundInfo.address,
       config.network,
       networkPassphrase,
-      rpc
+      rpc,
     );
   } finally {
     // Nothing to cleanup here; func-auth path releases locks internally

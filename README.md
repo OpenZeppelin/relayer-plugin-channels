@@ -67,7 +67,7 @@ mkdir -p plugins/channels
 `plugins/channels/index.ts`
 
 ```ts
-export { handler } from '@openzeppelin/relayer-plugin-channels';
+export { handler } from "@openzeppelin/relayer-plugin-channels";
 ```
 
 ### Configure the Relayer
