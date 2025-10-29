@@ -1,4 +1,4 @@
-import type { PluginKVStore } from "@openzeppelin/relayer-sdk";
+import type { PluginKVStore } from '@openzeppelin/relayer-sdk';
 
 type Entry = { value: any; expiresAt?: number };
 
@@ -16,11 +16,7 @@ export class FakeKV implements PluginKVStore {
     return e.value as T;
   }
 
-  async set(
-    key: string,
-    value: any,
-    opts?: { ttlSec?: number },
-  ): Promise<boolean> {
+  async set(key: string, value: any, opts?: { ttlSec?: number }): Promise<boolean> {
     const entry: Entry = { value };
     if (opts?.ttlSec && opts.ttlSec > 0) {
       entry.expiresAt = Date.now() + opts.ttlSec * 1000;
@@ -41,16 +37,16 @@ export class FakeKV implements PluginKVStore {
   async withLock<T>(
     key: string,
     fn: () => Promise<T>,
-    opts?: { ttlSec?: number; onBusy?: "throw" | "skip" },
+    opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }
   ): Promise<T | null> {
     // Simple, non-reentrant lock for testing; not robust
     if (await this.exists(key)) {
-      if (opts?.onBusy === "skip") return null;
-      throw new Error("lock busy");
+      if (opts?.onBusy === 'skip') return null;
+      throw new Error('lock busy');
     }
     // Respect requested TTL to better emulate production behavior
     const ttl = opts?.ttlSec && opts.ttlSec > 0 ? opts.ttlSec : 1;
-    await this.set(key, { token: "lock" }, { ttlSec: ttl });
+    await this.set(key, { token: 'lock' }, { ttlSec: ttl });
     try {
       return await fn();
     } finally {

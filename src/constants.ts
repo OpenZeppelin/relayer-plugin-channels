@@ -41,7 +41,7 @@ export const TIME = {
 
 // Simulation-related defaults
 export const SIMULATION = {
-  DEFAULT_FEE: "100",
+  DEFAULT_FEE: '100',
   MIN_TIME_BOUND: 0,
   MAX_TIME_BOUND_OFFSET_SECONDS: 30,
   MAX_FUTURE_TIME_BOUND_SECONDS: 30,

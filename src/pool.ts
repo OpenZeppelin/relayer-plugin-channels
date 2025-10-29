@@ -7,23 +7,23 @@
  * - Uses a short global mutex to make acquire atomic across workers.
  */
 
-import { PluginKVStore, pluginError } from "@openzeppelin/relayer-sdk";
-import crypto from "crypto";
-import { getLockTtlSeconds } from "./config";
-import { HTTP_STATUS, POOL } from "./constants";
+import { PluginKVStore, pluginError } from '@openzeppelin/relayer-sdk';
+import crypto from 'crypto';
+import { getLockTtlSeconds } from './config';
+import { HTTP_STATUS, POOL } from './constants';
 
 export type PoolLock = { relayerId: string; token: string };
 
 type MembershipDoc = { relayerIds: string[] };
 
 export class ChannelPool {
-  private readonly network: "testnet" | "mainnet";
+  private readonly network: 'testnet' | 'mainnet';
   private readonly globalLockKey: string;
   private readonly channelLockTtlSec: number;
   private readonly mutexTtlSec: number;
   private readonly kv: PluginKVStore;
 
-  constructor(network: "testnet" | "mainnet", kv: PluginKVStore) {
+  constructor(network: 'testnet' | 'mainnet', kv: PluginKVStore) {
     this.network = network;
     this.kv = kv;
     this.globalLockKey = `${this.network}:channel-pool-lock`;
@@ -39,27 +39,25 @@ export class ChannelPool {
       if (r === null) {
         const jitter =
           POOL.MUTEX_RETRY_MIN_MS +
-          Math.floor(
-            Math.random() *
-              (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1),
-          );
+          Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
         await sleep(jitter);
         continue;
       }
       return r;
     }
-    throw pluginError("Too many transactions queued. Please try again later", {
-      code: "POOL_CAPACITY",
+    throw pluginError('Too many transactions queued. Please try again later', {
+      code: 'POOL_CAPACITY',
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,
     });
   }
 
   // Run a function under the short-lived global mutex; returns null if busy
   private async withGlobalMutex<T>(fn: () => Promise<T>): Promise<T | null> {
-    const r = (await (this.kv as any).withLock(this.globalLockKey, fn, {
-      ttlSec: this.mutexTtlSec,
-      onBusy: "skip",
-    })) as T | null;
+    const r = (await (this.kv as any).withLock(
+      this.globalLockKey,
+      fn,
+      { ttlSec: this.mutexTtlSec, onBusy: 'skip' },
+    )) as T | null;
     return r;
   }
 
@@ -67,13 +65,10 @@ export class ChannelPool {
   private async tryLockAnyRelayer(): Promise<PoolLock | null> {
     const ids = await this.getRelayerIdsFromKV();
     if (ids.length === 0) {
-      throw pluginError(
-        "No channel accounts configured. Use the management API to set channel accounts.",
-        {
-          code: "NO_CHANNELS_CONFIGURED",
-          status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-        },
-      );
+      throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
+        code: 'NO_CHANNELS_CONFIGURED',
+        status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+      });
     }
     shuffle(ids);
     for (const relayerId of ids) {
@@ -131,11 +126,9 @@ function shuffle<T>(arr: T[]): void {
 
 function randomToken(): string {
   try {
-    return crypto.randomBytes(16).toString("hex");
+    return crypto.randomBytes(16).toString('hex');
   } catch {
-    return (
-      Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
-    );
+    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   }
 }
 

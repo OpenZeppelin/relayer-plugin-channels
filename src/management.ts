@@ -6,10 +6,10 @@
  * - setChannelAccounts: replaces relayerIds array in KV (checks lock conflicts)
  */
 
-import type { PluginContext, PluginKVStore } from "@openzeppelin/relayer-sdk";
-import { pluginError } from "@openzeppelin/relayer-sdk";
-import { loadConfig, getAdminSecret } from "./config";
-import { HTTP_STATUS } from "./constants";
+import type { PluginContext, PluginKVStore } from '@openzeppelin/relayer-sdk';
+import { pluginError } from '@openzeppelin/relayer-sdk';
+import { loadConfig, getAdminSecret } from './config';
+import { HTTP_STATUS } from './constants';
 
 function timingSafeEqual(a: string, b: string): boolean {
   // Basic constant-time comparison without crypto dep
@@ -23,10 +23,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 export function isManagementRequest(params: any): boolean {
   return Boolean(
-    params &&
-      typeof params === "object" &&
-      (params as any).management &&
-      typeof (params as any).management === "object",
+    params && typeof params === 'object' && (params as any).management && typeof (params as any).management === 'object',
   );
 }
 
@@ -34,65 +31,50 @@ export async function handleManagement(context: PluginContext): Promise<any> {
   const { kv, params } = context;
   const adminSecretEnv = getAdminSecret();
   if (!adminSecretEnv) {
-    throw pluginError("Management API disabled", {
-      code: "MANAGEMENT_DISABLED",
+    throw pluginError('Management API disabled', {
+      code: 'MANAGEMENT_DISABLED',
       status: HTTP_STATUS.FORBIDDEN,
     });
   }
 
   const m = params?.management || {};
-  const provided = (m.adminSecret ?? "").toString();
+  const provided = (m.adminSecret ?? '').toString();
   if (!provided || !timingSafeEqual(provided, adminSecretEnv)) {
-    throw pluginError("Unauthorized", {
-      code: "UNAUTHORIZED",
-      status: HTTP_STATUS.UNAUTHORIZED,
-    });
+    throw pluginError('Unauthorized', { code: 'UNAUTHORIZED', status: HTTP_STATUS.UNAUTHORIZED });
   }
 
-  const action = String(m.action || "");
+  const action = String(m.action || '');
   // Load config (requires env like STELLAR_NETWORK) after auth
   const cfg = loadConfig();
   switch (action) {
-    case "listChannelAccounts":
+    case 'listChannelAccounts':
       return await listChannelAccounts(kv, cfg.network);
-    case "setChannelAccounts":
+    case 'setChannelAccounts':
       return await setChannelAccounts(kv, cfg.network, m);
     default:
-      throw pluginError("Invalid management action", {
-        code: "INVALID_ACTION",
-        status: HTTP_STATUS.BAD_REQUEST,
-      });
+      throw pluginError('Invalid management action', { code: 'INVALID_ACTION', status: HTTP_STATUS.BAD_REQUEST });
   }
 }
 
-async function listChannelAccounts(
-  kv: PluginKVStore,
-  network: "testnet" | "mainnet",
-): Promise<any> {
+async function listChannelAccounts(kv: PluginKVStore, network: 'testnet' | 'mainnet'): Promise<any> {
   const key = `${network}:channel:relayer-ids`;
   try {
     const doc: any = await (kv as any).get?.(key);
-    const relayerIds: string[] = Array.isArray(doc?.relayerIds)
-      ? doc.relayerIds.map(normalizeId)
-      : [];
+    const relayerIds: string[] = Array.isArray(doc?.relayerIds) ? doc.relayerIds.map(normalizeId) : [];
     return { relayerIds };
   } catch (e: any) {
-    throw pluginError("KV error while listing channel accounts", {
-      code: "KV_ERROR",
+    throw pluginError('KV error while listing channel accounts', {
+      code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
     });
   }
 }
 
-async function setChannelAccounts(
-  kv: PluginKVStore,
-  network: "testnet" | "mainnet",
-  payload: any,
-): Promise<any> {
+async function setChannelAccounts(kv: PluginKVStore, network: 'testnet' | 'mainnet', payload: any): Promise<any> {
   const incoming = payload?.relayerIds;
   if (!Array.isArray(incoming)) {
-    throw pluginError("Invalid payload: relayerIds must be an array", {
-      code: "INVALID_PAYLOAD",
+    throw pluginError('Invalid payload: relayerIds must be an array', {
+      code: 'INVALID_PAYLOAD',
       status: HTTP_STATUS.BAD_REQUEST,
     });
   }
@@ -112,8 +94,8 @@ async function setChannelAccounts(
     }
   }
   if (locked.length > 0) {
-    throw pluginError("Locked relayer IDs cannot be removed", {
-      code: "LOCKED_CONFLICT",
+    throw pluginError('Locked relayer IDs cannot be removed', {
+      code: 'LOCKED_CONFLICT',
       status: HTTP_STATUS.CONFLICT,
       details: { locked },
     });
@@ -124,8 +106,8 @@ async function setChannelAccounts(
     await kv.set(listKey, { relayerIds });
     return { ok: true, appliedRelayerIds: relayerIds };
   } catch (e: any) {
-    throw pluginError("KV error while saving channel accounts", {
-      code: "KV_ERROR",
+    throw pluginError('KV error while saving channel accounts', {
+      code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
     });
   }
@@ -145,44 +127,28 @@ function unique(arr: string[]): string[] {
   return Array.from(new Set(arr));
 }
 
-async function readStoredRelayerIds(
-  kv: PluginKVStore,
-  key: string,
-): Promise<string[]> {
+async function readStoredRelayerIds(kv: PluginKVStore, key: string): Promise<string[]> {
   try {
     const doc: any = await (kv as any).get?.(key);
-    return Array.isArray(doc?.relayerIds)
-      ? doc.relayerIds.map(normalizeId)
-      : [];
+    return Array.isArray(doc?.relayerIds) ? doc.relayerIds.map(normalizeId) : [];
   } catch (error) {
-    throw pluginError("KV error while reading channel accounts", {
-      code: "KV_ERROR",
+    throw pluginError('KV error while reading channel accounts', {
+      code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-      details: {
-        key,
-        message: error instanceof Error ? error.message : String(error),
-      },
+      details: { key, message: error instanceof Error ? error.message : String(error) },
     });
   }
 }
 
-async function isRelayerIdLocked(
-  kv: PluginKVStore,
-  network: "testnet" | "mainnet",
-  id: string,
-): Promise<boolean> {
+async function isRelayerIdLocked(kv: PluginKVStore, network: 'testnet' | 'mainnet', id: string): Promise<boolean> {
   const key = `${network}:channel:in-use:${id}`;
   try {
     return await kv.exists(key);
   } catch (error) {
-    throw pluginError("KV error while checking relayer lock", {
-      code: "KV_ERROR",
+    throw pluginError('KV error while checking relayer lock', {
+      code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-      details: {
-        relayerId: id,
-        key,
-        message: error instanceof Error ? error.message : String(error),
-      },
+      details: { relayerId: id, key, message: error instanceof Error ? error.message : String(error) },
     });
   }
 }
