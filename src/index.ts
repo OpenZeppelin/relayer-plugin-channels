@@ -7,17 +7,17 @@
 
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 import type { PluginAPI, Relayer } from '@openzeppelin/relayer-sdk';
-import { PoolLock, ChannelPool } from './pool';
-import { loadConfig, getNetworkPassphrase } from './config';
-import { ChannelAccountsResponse } from './types';
-import { validateAndParseRequest } from './validation';
-import { isManagementRequest, handleManagement } from './management';
-import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
-import { HTTP_STATUS } from './constants';
+import { PoolLock, ChannelPool } from './plugin/pool';
+import { loadConfig, getNetworkPassphrase } from './plugin/config';
+import { ChannelAccountsResponse } from './plugin/types';
+import { validateAndParseRequest } from './plugin/validation';
+import { isManagementRequest, handleManagement } from './plugin/management';
+import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './plugin/submit';
+import { HTTP_STATUS } from './plugin/constants';
 import { Transaction, SorobanRpc, xdr } from '@stellar/stellar-sdk';
-import { simulateAndBuildWithChannel } from './simulation';
-import { calculateMaxFee } from './fee';
-import { validateExistingTransactionForSubmitOnly } from './tx';
+import { simulateAndBuildWithChannel } from './plugin/simulation';
+import { calculateMaxFee } from './plugin/fee';
+import { validateExistingTransactionForSubmitOnly } from './plugin/tx';
 
 async function handleXdrSubmit(
   xdrStr: string,
@@ -160,3 +160,6 @@ export async function handler(context: PluginContext): Promise<any> {
   const result = await channelAccounts(context);
   return result;
 }
+
+// Export client for external use
+export * from './client/index.js';

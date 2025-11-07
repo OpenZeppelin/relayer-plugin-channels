@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { Networks } from '@stellar/stellar-sdk';
-import { loadConfig, getNetworkPassphrase, getLockTtlSeconds, getMaxFee } from '../config';
+import { loadConfig, getNetworkPassphrase, getLockTtlSeconds, getMaxFee } from '../src/plugin/config';
 
 const env = process.env;
 
