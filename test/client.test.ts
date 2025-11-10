@@ -19,8 +19,8 @@ describe('ChannelsClient', () => {
     vi.clearAllMocks();
   });
 
-  describe('Configuration and Mode Detection', () => {
-    test('should use HTTP mode when pluginId is not provided', () => {
+  describe('Configuration', () => {
+    test('should configure direct HTTP connection when pluginId is not provided', () => {
       const mockAxiosInstance = {
         post: vi.fn(),
       };
@@ -41,7 +41,7 @@ describe('ChannelsClient', () => {
       });
     });
 
-    test('should use relayer mode when pluginId is provided', () => {
+    test('should configure relayer connection when pluginId is provided', () => {
       const mockPluginsApi = {
         callPlugin: vi.fn(),
       };
@@ -62,12 +62,12 @@ describe('ChannelsClient', () => {
       expect(PluginsApi).toHaveBeenCalled();
     });
 
-    test('should throw error when baseUrl is missing in HTTP mode', () => {
+    test('should throw error when baseUrl is missing without pluginId', () => {
       expect(() => {
         new ChannelsClient({
           apiKey: 'test-api-key',
         } as any);
-      }).toThrow('baseUrl is required when pluginId is not provided (direct HTTP mode)');
+      }).toThrow('baseUrl is required when pluginId is not provided');
     });
 
     test('should respect custom timeout', () => {
@@ -90,7 +90,7 @@ describe('ChannelsClient', () => {
     });
   });
 
-  describe('submitTransaction - HTTP Mode', () => {
+  describe('submitTransaction - Direct HTTP', () => {
     let client: ChannelsClient;
     let mockAxiosInstance: any;
 
@@ -162,7 +162,7 @@ describe('ChannelsClient', () => {
     });
   });
 
-  describe('submitSorobanTransaction - HTTP Mode', () => {
+  describe('submitSorobanTransaction - Direct HTTP', () => {
     let client: ChannelsClient;
     let mockAxiosInstance: any;
 
@@ -210,7 +210,7 @@ describe('ChannelsClient', () => {
     });
   });
 
-  describe('submitTransaction - Relayer Mode', () => {
+  describe('submitTransaction - Via Relayer', () => {
     let client: ChannelsClient;
     let mockPluginsApi: any;
 
