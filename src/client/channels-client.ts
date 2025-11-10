@@ -13,31 +13,26 @@ import type {
 } from './types';
 
 /**
- * Unified channels client that supports both direct HTTP and OpenZeppelin Relayer modes
- *
- * The client automatically detects the mode based on configuration:
- * - If `pluginId` is provided → routes through OpenZeppelin Relayer
- * - Otherwise → connects directly via HTTP
+ * Client for interacting with the Channels plugin
  *
  * @example
- * // Direct HTTP mode
+ * // Connecting to OpenZeppelin's managed Channels service
  * const client = new ChannelsClient({
- *   baseUrl: 'https://channels.example.com',
+ *   baseUrl: 'https://channels.openzeppelin.com',
  *   apiKey: 'your-api-key',
- *   adminSecret: 'your-admin-secret',
+ *   adminSecret: 'your-admin-secret', // Optional, for management operations
  * });
  *
  * @example
- * // Relayer mode
+ * // Connecting to your own Relayer with Channels plugin
  * const client = new ChannelsClient({
- *   baseUrl: 'https://relayer.example.com',
- *   pluginId: 'channels-plugin-id',
- *   apiKey: 'relayer-api-key',
- *   adminSecret: 'your-admin-secret',
+ *   baseUrl: 'http://localhost:8080',
+ *   pluginId: 'channels',
+ *   apiKey: 'your-relayer-api-key',
+ *   adminSecret: 'your-admin-secret', // Optional, for management operations
  * });
  */
 export class ChannelsClient {
-  private readonly mode: 'http' | 'relayer';
   private readonly adminSecret?: string;
   private readonly axiosClient?: AxiosInstance;
   private readonly pluginsApi?: PluginsApi;
@@ -46,10 +41,8 @@ export class ChannelsClient {
   constructor(config: ChannelsClientConfig) {
     this.adminSecret = config.adminSecret;
 
-    // Auto-detect mode based on presence of pluginId
+    // Route through Relayer plugin system if pluginId provided, otherwise connect directly
     if ('pluginId' in config && config.pluginId) {
-      // Relayer mode
-      this.mode = 'relayer';
       this.pluginId = config.pluginId;
 
       const relayerConfig = new Configuration({
@@ -59,11 +52,8 @@ export class ChannelsClient {
 
       this.pluginsApi = new PluginsApi(relayerConfig);
     } else {
-      // Direct HTTP mode
-      this.mode = 'http';
-
       if (!('baseUrl' in config) || !config.baseUrl) {
-        throw new Error('baseUrl is required when pluginId is not provided (direct HTTP mode)');
+        throw new Error('baseUrl is required when pluginId is not provided');
       }
 
       this.axiosClient = axios.create({
@@ -273,18 +263,18 @@ export class ChannelsClient {
 
   /**
    * Internal method to send the actual HTTP request
-   * Routes to either axios (direct HTTP) or PluginsApi (relayer) based on mode
+   * Routes to either axios (direct HTTP) or PluginsApi (relayer) based on configuration
    *
    * @param payload The complete payload (already wrapped in {params})
    * @returns Raw response from the service/relayer
    */
   private async sendCall(payload: { params: unknown }): Promise<unknown> {
-    if (this.mode === 'http') {
-      const response = await this.axiosClient!.post('/', payload);
+    if (this.pluginsApi) {
+      const response = await this.pluginsApi.callPlugin(this.pluginId!, payload);
       return response.data;
     }
 
-    const response = await this.pluginsApi!.callPlugin(this.pluginId!, payload);
+    const response = await this.axiosClient!.post('/', payload);
     return response.data;
   }
 }

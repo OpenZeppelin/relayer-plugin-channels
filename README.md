@@ -366,35 +366,60 @@ pnpm add @openzeppelin/relayer-plugin-channels
 ```typescript
 import { ChannelsClient } from '@openzeppelin/relayer-plugin-channels';
 
-// Relayer mode
+// Connecting to OpenZeppelin's managed Channels service
 const client = new ChannelsClient({
-  baseUrl: 'http://localhost:8080',
-  apiKey: 'your-relayer-api-key',
-  pluginId: 'channels', // Routes through a relayer plugin system
+  baseUrl: 'https://channels.openzeppelin.com',
+  apiKey: 'your-api-key',
 });
 
-// HTTP mode
-const directClient = new ChannelsClient({
+// Connecting to your own Relayer with Channels plugin
+const relayerClient = new ChannelsClient({
+  baseUrl: 'http://localhost:8080',
+  pluginId: 'channels',
+  apiKey: 'your-relayer-api-key',
+  adminSecret: 'your-admin-secret', // Optional: Required for management operations
+});
+```
+
+### Configuration
+
+**Managed Service**
+
+When connecting to OpenZeppelin's managed Channels service (which runs behind Cloudflare and a load balancer), provide just the `baseUrl` and `apiKey`:
+
+```typescript
+// Mainnet
+const client = new ChannelsClient({
   baseUrl: 'https://channels.openzeppelin.com',
+  apiKey: 'your-api-key',
+});
+
+// Testnet
+const testnetClient = new ChannelsClient({
+  baseUrl: 'https://channels.openzeppelin.com/testnet',
   apiKey: 'your-api-key',
 });
 ```
 
-### Client Modes
+**Generate API Keys:**
 
-The client automatically detects which mode to use based on configuration:
+- Testnet: https://channels.openzeppelin.com/testnet/gen
+- Mainnet: https://channels.openzeppelin.com/gen
 
-**Relayer Mode** (with `pluginId`):
+**Self-Hosted Relayer**
 
-- Routes requests to OpenZeppelin Relayer
-- Uses `PluginsApi` under the hood
-- Endpoint: `/api/v1/plugins/{pluginId}/call`
+When connecting directly to your own OpenZeppelin Relayer instance, include the `pluginId`:
 
-**Direct HTTP Mode** (without `pluginId`):
+```typescript
+const client = new ChannelsClient({
+  baseUrl: 'http://localhost:8080',
+  pluginId: 'channels',
+  apiKey: 'your-relayer-api-key',
+  adminSecret: 'your-admin-secret', // Optional: Required for management operations
+});
+```
 
-- Connects directly to a standalone service
-- Uses axios for HTTP requests
-- Endpoint: `/`
+The client automatically routes requests appropriately based on whether `pluginId` is provided
 
 ### Usage Examples
 
@@ -431,7 +456,7 @@ const adminClient = new ChannelsClient({
   baseUrl: 'http://localhost:8080',
   apiKey: 'your-api-key',
   pluginId: 'channels',
-  adminSecret: 'your-admin-secret', // Required for management ops
+  adminSecret: 'your-admin-secret', // Required for management operations
 });
 
 // List configured channel accounts
@@ -511,11 +536,11 @@ import type {
 ```typescript
 interface ChannelsClientConfig {
   // Required
-  baseUrl: string; // Relayer or plugin service URL
+  baseUrl: string; // Service or Relayer URL
   apiKey: string; // API key for authentication
 
   // Optional
-  pluginId?: string; // Plugin ID (enables relayer mode)
+  pluginId?: string; // Include when connecting to a Relayer directly
   adminSecret?: string; // Required for management operations
   timeout?: number; // Request timeout in ms (default: 30000)
 }
