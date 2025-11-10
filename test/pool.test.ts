@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { ChannelPool } from '../pool';
+import { ChannelPool } from '../src/plugin/pool';
 import { FakeKV } from './helpers/fakeKV';
 
 describe('ChannelPool', () => {

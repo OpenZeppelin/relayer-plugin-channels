@@ -12,23 +12,51 @@
  - A Stellar key via CLI (`stellar keys`)
  - Deployed smoke-contract (see contracts/smoke-contract/contract.sh build|optimize|deploy)
 
- Usage
-   ts-node scripts/smoke.ts \
-     --base-url http://localhost:8080 \
-     --api-key $RELAYER_API_KEY \
-     --account-name default \
-     --contract-id <CONTRACT_ID>
+ Usage Examples
+
+   # Relayer mode (default) - local relayer with 'channels' plugin
+   tsx scripts/smoke.ts --api-key YOUR_API_KEY
+
+   # Relayer mode - custom relayer URL
+   tsx scripts/smoke.ts \
+     --api-key YOUR_API_KEY \
+     --base-url https://my-relayer.com \
+     --plugin-id channels
+
+   # Direct HTTP mode - standalone plugin service
+   tsx scripts/smoke.ts \
+     --api-key YOUR_API_KEY \
+     --base-url https://plugin-service.com
+
+   # Run specific test with custom contract
+   tsx scripts/smoke.ts \
+     --api-key YOUR_API_KEY \
+     --test-id xdr-payment \
+     --contract-id CAM5NSLGILAYZ6UMPDOT5MBO2MUM65VM2PMUE7Z2TTBGNEKZZRPFML5W
 
  Flags / env (args > env > defaults)
-   --base-url (BASE_URL)           default: http://localhost:8080
-   --api-key (API_KEY)             required: relayer API key
-   --test-id (TEST_ID)             optional: run only one test id
-   --network (NETWORK)             default: testnet | also supports mainnet
+   --api-key (API_KEY)             required: API key for authentication
+   --plugin-id (PLUGIN_ID)         default: 'channels' (enables relayer mode)
+                                   omit this flag to use direct HTTP mode
+   --base-url (BASE_URL)           default: http://localhost:8080 (when using plugin-id)
+                                   required when omitting plugin-id (direct HTTP mode)
+   --account-name (ACCOUNT_NAME)   default: test-account (must exist in `stellar keys`)
+   --contract-id (CONTRACT_ID)     default: bundled smoke-contract on testnet
+   --network (NETWORK)             default: testnet | also supports: mainnet
    --rpc-url (RPC_URL)             default: https://soroban-testnet.stellar.org
-   --account-name (ACCOUNT_NAME)   default: test-account
-   --contract-id (CONTRACT_ID)     optional: defaults to bundled smoke-contract contract id
-   --concurrency (CONCURRENCY)     optional: number of parallel requests per test (default: 1)
-   --debug                         optional: print plugin logs/traces in responses
+   --test-id (TEST_ID)             optional: run only one test
+                                   options: xdr-payment, func-auth-no-auth, func-auth-address-auth
+   --concurrency (CONCURRENCY)     optional: parallel requests per test (default: 1)
+   --debug                         optional: print full plugin response with logs/traces
+
+ Client Modes
+   Relayer mode:      Uses ChannelsClient with pluginId
+                      Routes through relayer's PluginsApi at /api/v1/plugins/{pluginId}/call
+                      Default when --plugin-id is provided (defaults to 'channels')
+
+   Direct HTTP mode:  Uses ChannelsClient without pluginId
+                      Connects directly to plugin service at /api/v1/plugins/channels/call
+                      Used when --plugin-id is omitted and --base-url points to plugin service
 */
 
 import { execSync } from 'child_process';
@@ -44,6 +72,7 @@ import {
   Address,
   authorizeInvocation,
 } from '@stellar/stellar-sdk';
+import { ChannelsClient } from '../src/client/index';
 
 type ArgMap = Record<string, string | boolean>;
 
@@ -79,24 +108,6 @@ async function healthCheck(baseUrl: string, apiKey: string): Promise<void> {
   if (!res.ok) throw new Error(`Relayer health check failed: ${res.status} ${res.statusText}`);
 }
 
-async function callPlugin(baseUrl: string, apiKey: string, params: any): Promise<any> {
-  const url = `${baseUrl}/api/v1/plugins/channels/call`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ params }),
-  } as any);
-  const text = await res.text();
-  let data: any;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = { raw: text };
-  }
-  if (!res.ok) throw new Error(`Plugin call failed: HTTP ${res.status} ${res.statusText} -> ${JSON.stringify(data)}`);
-  return data;
-}
-
 function getKeypair(accountName?: string): { keypair: Keypair; address: string } {
   const name = accountName || 'test-account';
   const address = execSync(`stellar keys address ${name}`, { encoding: 'utf8' }).trim();
@@ -129,8 +140,9 @@ function buildNoAuthFuncPayload(contractId: string) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const baseUrl = String(args['base-url'] || process.env.BASE_URL || 'http://localhost:8080');
   const apiKey = String(args['api-key'] || process.env.API_KEY || 'REPLACE_ME');
+  const pluginId = (args['plugin-id'] || process.env.PLUGIN_ID || 'channels') as string | undefined;
+  const baseUrl = String(args['base-url'] || process.env.BASE_URL || (pluginId ? 'http://localhost:8080' : ''));
   const network = String(args.network || process.env.NETWORK || 'testnet').toLowerCase() as 'testnet' | 'mainnet';
   const passphrase = np(network);
   const rpcUrl = String(args['rpc-url'] || process.env.RPC_URL || 'https://soroban-testnet.stellar.org');
@@ -143,7 +155,12 @@ async function main() {
   );
 
   if (!apiKey || apiKey === 'REPLACE_ME') {
-    console.warn('⚠ Set --api-key or API_KEY to your relayer API key');
+    console.warn('⚠ Set --api-key or API_KEY to your API key');
+  }
+
+  if (!baseUrl) {
+    console.error('❌ --base-url is required when not using relayer mode (no plugin-id)');
+    process.exit(1);
   }
 
   await healthCheck(baseUrl, apiKey);
@@ -151,9 +168,13 @@ async function main() {
   const rpc = new SorobanRpc.Server(rpcUrl);
   const { keypair, address } = getKeypair(accountName);
 
+  // Initialize the client
+  const client = pluginId
+    ? new ChannelsClient({ baseUrl, apiKey, pluginId })
+    : new ChannelsClient({ baseUrl, apiKey });
+
   type Ctx = {
-    baseUrl: string;
-    apiKey: string;
+    client: ChannelsClient;
     rpc: SorobanRpc.Server;
     passphrase: string;
     keypair: Keypair;
@@ -161,31 +182,31 @@ async function main() {
     contractId: string;
     debug: boolean;
   };
-  const ctx: Ctx = { baseUrl, apiKey, rpc, passphrase, keypair, address, contractId, debug };
+  const ctx: Ctx = { client, rpc, passphrase, keypair, address, contractId, debug };
 
   const TESTS: { id: string; label: string; run: (ctx: Ctx) => Promise<void> }[] = [
     {
       id: 'xdr-payment',
       label: 'XDR submit-only: signed self-payment',
-      run: async ({ baseUrl, apiKey, rpc, passphrase, address, keypair, debug }) => {
+      run: async ({ client, rpc, passphrase, address, keypair, debug }) => {
         const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair);
-        const res = await callPlugin(baseUrl, apiKey, { xdr: tx.toXDR() });
-        printResult('xdr-payment', res, debug);
+        const res = await client.submitTransaction({ xdr: tx.toXDR() });
+        printResult('xdr-payment', { success: true, data: res }, debug);
       },
     },
     {
       id: 'func-auth-no-auth',
       label: 'func+auth: no_auth_bump(42)',
-      run: async ({ baseUrl, apiKey, contractId, debug }) => {
+      run: async ({ client, contractId, debug }) => {
         const payload = buildNoAuthFuncPayload(contractId);
-        const res = await callPlugin(baseUrl, apiKey, { func: payload.func, auth: payload.auth });
-        printResult('func-auth-no-auth', res, debug);
+        const res = await client.submitSorobanTransaction({ func: payload.func, auth: payload.auth });
+        printResult('func-auth-no-auth', { success: true, data: res }, debug);
       },
     },
     {
       id: 'func-auth-address-auth',
       label: 'func+auth: write_with_address_auth(addr, 777)',
-      run: async ({ baseUrl, apiKey, rpc, passphrase, address, keypair, contractId, debug }) => {
+      run: async ({ client, rpc, passphrase, address, keypair, contractId, debug }) => {
         const latest = await rpc.getLatestLedger();
         const validUntil = Number(latest.sequence) + 64;
         const invokeArgs = new xdr.InvokeContractArgs({
@@ -199,11 +220,11 @@ async function main() {
           subInvocations: [],
         });
         const signedEntry = await authorizeInvocation(keypair, validUntil, rootInv, address, passphrase);
-        const res = await callPlugin(baseUrl, apiKey, {
+        const res = await client.submitSorobanTransaction({
           func: func.toXDR('base64'),
           auth: [signedEntry.toXDR('base64')],
         });
-        printResult('func-auth-address-auth', res, debug);
+        printResult('func-auth-address-auth', { success: true, data: res }, debug);
       },
     },
   ];
@@ -228,7 +249,9 @@ async function main() {
     }
   } else {
     // Parallel execution
-    console.log(`📊 Running ${selected.length} test${selected.length > 1 ? 's' : ''} with ${concurrency}x concurrency...\n`);
+    console.log(
+      `📊 Running ${selected.length} test${selected.length > 1 ? 's' : ''} with ${concurrency}x concurrency...\n`
+    );
     for (const t of selected) {
       console.log(`📋 ${t.label} (x${concurrency} parallel)...`);
       const testStart = Date.now();
@@ -240,14 +263,18 @@ async function main() {
       );
       const results = await Promise.all(promises);
       const testElapsed = Date.now() - testStart;
-      const succeeded = results.filter(r => r.success).length;
-      const failed = results.filter(r => !r.success).length;
-      console.log(`   ✓ Completed ${concurrency} requests in ${testElapsed}ms (${succeeded} succeeded, ${failed} failed)`);
+      const succeeded = results.filter((r) => r.success).length;
+      const failed = results.filter((r) => !r.success).length;
+      console.log(
+        `   ✓ Completed ${concurrency} requests in ${testElapsed}ms (${succeeded} succeeded, ${failed} failed)`
+      );
       if (failed > 0) {
         console.log('   Errors:');
-        results.filter(r => !r.success).forEach(r => {
-          console.log(`     [${r.index}]: ${r.error?.message || r.error}`);
-        });
+        results
+          .filter((r) => !r.success)
+          .forEach((r) => {
+            console.log(`     [${r.index}]: ${r.error?.message || r.error}`);
+          });
       }
       console.log('');
     }
@@ -262,18 +289,13 @@ async function main() {
 declare const fetch: any;
 
 main().catch((e) => {
-  // Attempt to print compact error from plugin envelope
-  const msg = e?.message || String(e);
-  try {
-    const jsonStart = msg.indexOf('{');
-    if (jsonStart >= 0) {
-      const env = JSON.parse(msg.slice(jsonStart));
-      printResult('error', env, Boolean(process.env.DEBUG));
-    } else {
-      console.error(msg);
-    }
-  } catch {
-    console.error(msg);
+  // Handle client errors
+  console.error('❌ Error:', e?.message || String(e));
+  if (e?.category) {
+    console.error(`   Category: ${e.category}`);
+  }
+  if (e?.errorDetails && process.env.DEBUG) {
+    console.error(`   Details:`, e.errorDetails);
   }
   process.exit(1);
 });

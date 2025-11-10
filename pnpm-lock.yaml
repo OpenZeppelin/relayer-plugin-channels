@@ -17,6 +17,9 @@ importers:
       '@stellar/stellar-sdk':
         specifier: ^11.2.0
         version: 11.3.0
+      axios:
+        specifier: ^1.6.0
+        version: 1.13.1
     devDependencies:
       '@changesets/cli':
         specifier: ^2.27.7

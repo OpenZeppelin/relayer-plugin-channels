@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { calculateMaxFee } from '../fee';
+import { calculateMaxFee } from '../src/plugin/fee';
 import { TransactionBuilder, Account, Networks } from '@stellar/stellar-sdk';
 
 describe('fee', () => {

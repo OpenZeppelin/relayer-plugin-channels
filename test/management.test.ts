@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { handleManagement, isManagementRequest } from '../management';
+import { handleManagement, isManagementRequest } from '../src/plugin/management';
 import type { PluginContext } from '@openzeppelin/relayer-sdk';
 import { FakeKV } from './helpers/fakeKV';
 

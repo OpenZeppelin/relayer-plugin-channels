@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { TransactionBuilder, Account, Networks } from '@stellar/stellar-sdk';
-import { validateExistingTransactionForSubmitOnly } from '../tx';
+import { validateExistingTransactionForSubmitOnly } from '../src/plugin/tx';
 
 describe('tx validation', () => {
   const passphrase = Networks.TESTNET;
