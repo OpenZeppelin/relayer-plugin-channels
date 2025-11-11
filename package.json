@@ -1,6 +1,6 @@
 {
   "name": "@openzeppelin/relayer-plugin-channels",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenZeppelin Relayer Plugin for Stellar Channel Accounts",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
