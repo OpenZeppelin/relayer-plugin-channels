@@ -12,8 +12,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1
       '@openzeppelin/relayer-sdk':
-        specifier: ^1.6.0
-        version: 1.6.0
+        specifier: ^1.7.0
+        version: 1.7.0
       '@stellar/stellar-sdk':
         specifier: ^11.2.0
         version: 11.3.0
@@ -362,8 +362,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@openzeppelin/relayer-sdk@1.6.0':
-    resolution: {integrity: sha512-UjL4TLz4tvCY1ssE3wf47FU+/2vE/bJ5HoXyufUsidL5bRXwf6ziwWZWUa0YsPiGEQNdVtsuoUR9qqHjxYqlXg==}
+  '@openzeppelin/relayer-sdk@1.7.0':
+    resolution: {integrity: sha512-XaQDdfooj6LC9Xa2fhq0ElaF0q/+rn4D0KNKDiwUa+QdZk18LeIiKxyZKxXuA4RynXxosISe1oQW78XYC/nE6Q==}
     engines: {node: '>=22.14.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
 
   '@pkgr/core@0.2.9':
@@ -1947,7 +1947,7 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.19.1
 
-  '@openzeppelin/relayer-sdk@1.6.0':
+  '@openzeppelin/relayer-sdk@1.7.0':
     dependencies:
       axios: 1.13.1
     transitivePeerDependencies:
