@@ -851,8 +851,8 @@ async function main(): Promise<void> {
     const existingSigner = await fetchSignerRecord(signersApi, signerId);
     const existingRelayer = await fetchRelayerRecord(relayersApi, relayerId);
 
-    const signerExistedBefore = Boolean(existingSigner);
-    const relayerExistedBefore = Boolean(existingRelayer);
+    // const signerExistedBefore = Boolean(existingSigner);
+    // const relayerExistedBefore = Boolean(existingRelayer);
 
     let signerRecord = existingSigner;
     let relayerRecord = existingRelayer;
