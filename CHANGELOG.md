@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.3.1
+
+### Patch Changes
+
+- f26098a: chore: update the relayer-sdk version
+
 ## 0.3.0
 
 ### Minor Changes
