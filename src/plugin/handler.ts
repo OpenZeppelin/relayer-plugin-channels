@@ -14,7 +14,7 @@ import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
 import { HTTP_STATUS } from './constants';
-import { Transaction, SorobanRpc, xdr } from '@stellar/stellar-sdk';
+import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateAndBuildWithChannel } from './simulation';
 import { calculateMaxFee } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
@@ -40,8 +40,7 @@ async function handleFuncAuthSubmit(
   fundRelayer: Relayer,
   fundAddress: string,
   network: 'testnet' | 'mainnet',
-  networkPassphrase: string,
-  rpc: SorobanRpc.Server
+  networkPassphrase: string
 ): Promise<ChannelAccountsResponse> {
   let poolLock: PoolLock | undefined;
   try {
@@ -70,7 +69,7 @@ async function handleFuncAuthSubmit(
       auth,
       { address: channelInfo.address, sequence: channelStatus.sequence_number },
       fundAddress,
-      rpc,
+      fundRelayer,
       networkPassphrase
     );
 
@@ -104,7 +103,6 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   const config = loadConfig();
   const pool = new ChannelPool(config.network, kv);
   const networkPassphrase = getNetworkPassphrase(config.network);
-  const rpc = new SorobanRpc.Server(config.rpcUrl);
 
   try {
     // 1. Validate and parse request (xdr OR func+auth)
@@ -147,8 +145,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       fundRelayer as Relayer,
       fundInfo.address,
       config.network,
-      networkPassphrase,
-      rpc
+      networkPassphrase
     );
   } finally {
     // Nothing to cleanup here; func-auth path releases locks internally

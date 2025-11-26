@@ -11,7 +11,6 @@ import { HTTP_STATUS, CONFIG } from './constants';
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
   network: 'testnet' | 'mainnet';
-  rpcUrl: string;
 }
 
 function requireEnv(name: string): string {
@@ -39,12 +38,10 @@ export function loadConfig(): ChannelAccountsConfig {
   }
 
   const fundRelayerId = requireEnv('FUND_RELAYER_ID');
-  const rpcUrl = requireEnv('SOROBAN_RPC_URL');
 
   return {
     fundRelayerId,
     network: networkRaw as 'testnet' | 'mainnet',
-    rpcUrl,
   };
 }
 
@@ -64,19 +61,6 @@ export function getLockTtlSeconds(): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < CONFIG.MIN_LOCK_TTL_SECONDS || n > CONFIG.MAX_LOCK_TTL_SECONDS) {
     return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
-  }
-  return Math.floor(n);
-}
-
-/**
- * Get the max fee for fee bump transactions
- */
-export function getMaxFee(): number {
-  const raw = process.env.MAX_FEE;
-  if (!raw) return CONFIG.DEFAULT_MAX_FEE;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    return CONFIG.DEFAULT_MAX_FEE;
   }
   return Math.floor(n);
 }

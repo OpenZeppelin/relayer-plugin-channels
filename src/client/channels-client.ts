@@ -254,7 +254,10 @@ export class ChannelsClient {
 
     // Handle execution errors
     if (!response.success) {
-      throw new PluginExecutionError(response.error || 'Plugin execution failed', response.data);
+      const errorDetails = response.metadata
+        ? { ...response.data, metadata: response.metadata }
+        : response.data;
+      throw new PluginExecutionError(response.error || 'Plugin execution failed', errorDetails);
     }
 
     // Return data with metadata if present

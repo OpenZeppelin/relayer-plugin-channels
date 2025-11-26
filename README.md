@@ -210,7 +210,6 @@ Set the required environment variables for the plugin:
 ```bash
 # Required environment variables
 export STELLAR_NETWORK="testnet"        # or "mainnet"
-export SOROBAN_RPC_URL="https://soroban-testnet.stellar.org"
 export FUND_RELAYER_ID="channels-fund"
 export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 

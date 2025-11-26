@@ -66,7 +66,7 @@ import {
   Networks,
   Operation,
   Asset,
-  SorobanRpc,
+  rpc,
   Contract,
   xdr,
   Address,
@@ -115,8 +115,8 @@ function getKeypair(accountName?: string): { keypair: Keypair; address: string }
   return { keypair: Keypair.fromSecret(secret), address };
 }
 
-async function buildSignedSelfPayment(rpc: SorobanRpc.Server, passphrase: string, address: string, keypair: Keypair) {
-  const account = await rpc.getAccount(address);
+async function buildSignedSelfPayment(rpcServer: rpc.Server, passphrase: string, address: string, keypair: Keypair) {
+  const account = await rpcServer.getAccount(address);
   const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: passphrase })
     .addOperation(
       Operation.payment({ source: address, destination: address, asset: Asset.native(), amount: '0.0000010' })
@@ -149,6 +149,7 @@ async function main() {
   const accountName = String(args['account-name'] || process.env.ACCOUNT_NAME || 'test-account');
   const testId = (args['test-id'] || process.env.TEST_ID) as string | undefined;
   const debug = Boolean(args['debug'] || process.env.DEBUG);
+  if (debug) process.env.DEBUG = '1'; // Ensure DEBUG is set for error handlers
   const concurrency = parseInt(String(args['concurrency'] || process.env.CONCURRENCY || '1'), 10);
   const contractId = String(
     args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
@@ -165,7 +166,7 @@ async function main() {
 
   await healthCheck(baseUrl, apiKey);
 
-  const rpc = new SorobanRpc.Server(rpcUrl);
+  const rpcServer = new rpc.Server(rpcUrl);
   const { keypair, address } = getKeypair(accountName);
 
   // Initialize the client
@@ -175,14 +176,14 @@ async function main() {
 
   type Ctx = {
     client: ChannelsClient;
-    rpc: SorobanRpc.Server;
+    rpc: rpc.Server;
     passphrase: string;
     keypair: Keypair;
     address: string;
     contractId: string;
     debug: boolean;
   };
-  const ctx: Ctx = { client, rpc, passphrase, keypair, address, contractId, debug };
+  const ctx: Ctx = { client, rpc: rpcServer, passphrase, keypair, address, contractId, debug };
 
   const TESTS: { id: string; label: string; run: (ctx: Ctx) => Promise<void> }[] = [
     {
@@ -273,7 +274,11 @@ async function main() {
         results
           .filter((r) => !r.success)
           .forEach((r) => {
-            console.log(`     [${r.index}]: ${r.error?.message || r.error}`);
+            const msg = r.error?.message || r.error;
+            console.log(`     [${r.index}]: ${msg}`);
+            if (ctx.debug && r.error?.errorDetails) {
+              console.log(`            Details: ${JSON.stringify(r.error.errorDetails, null, 2)}`);
+            }
           });
       }
       console.log('');
@@ -295,7 +300,7 @@ main().catch((e) => {
     console.error(`   Category: ${e.category}`);
   }
   if (e?.errorDetails && process.env.DEBUG) {
-    console.error(`   Details:`, e.errorDetails);
+    console.error(`   Details: ${JSON.stringify(e.errorDetails, null, 2)}`);
   }
   process.exit(1);
 });
