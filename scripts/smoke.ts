@@ -149,7 +149,6 @@ async function main() {
   const accountName = String(args['account-name'] || process.env.ACCOUNT_NAME || 'test-account');
   const testId = (args['test-id'] || process.env.TEST_ID) as string | undefined;
   const debug = Boolean(args['debug'] || process.env.DEBUG);
-  if (debug) process.env.DEBUG = '1'; // Ensure DEBUG is set for error handlers
   const concurrency = parseInt(String(args['concurrency'] || process.env.CONCURRENCY || '1'), 10);
   const contractId = String(
     args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
@@ -295,11 +294,14 @@ declare const fetch: any;
 
 main().catch((e) => {
   // Handle client errors
+  const args = parseArgs(process.argv.slice(2));
+  const debug = Boolean(args['debug'] || process.env.DEBUG);
+
   console.error('❌ Error:', e?.message || String(e));
   if (e?.category) {
     console.error(`   Category: ${e.category}`);
   }
-  if (e?.errorDetails && process.env.DEBUG) {
+  if (e?.errorDetails && debug) {
     console.error(`   Details: ${JSON.stringify(e.errorDetails, null, 2)}`);
   }
   process.exit(1);

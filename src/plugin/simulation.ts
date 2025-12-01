@@ -47,7 +47,7 @@ export async function simulateAndBuildWithChannel(
   try {
     rpcResponse = await relayer.rpc({
       jsonrpc: '2.0',
-      id: 1,
+      id: Math.floor(Math.random() * 1e8).toString(),
       method: 'simulateTransaction',
       params: {
         transaction: transaction.toXDR(),
