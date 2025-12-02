@@ -28,6 +28,8 @@ export interface RelayerConfig {
   adminSecret?: string;
   /** Optional request timeout in milliseconds (default: 30000) */
   timeout?: number;
+  /** Header name for API key forwarding to plugin (default: 'x-api-key') */
+  apiKeyHeader?: string;
 }
 
 /**
@@ -94,6 +96,21 @@ export interface SetChannelAccountsResponse {
   ok: boolean;
   /** Array of relayer IDs that were applied */
   appliedRelayerIds: string[];
+  /** Optional metadata (logs and traces) */
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+}
+
+/**
+ * Response from getting fee usage
+ */
+export interface GetFeeUsageResponse {
+  /** The API key queried */
+  apiKey: string;
+  /** Total fees consumed (in stroops) */
+  consumed: number;
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];

@@ -11,6 +11,10 @@ import { HTTP_STATUS, CONFIG } from './constants';
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
   network: 'testnet' | 'mainnet';
+  lockTtlSeconds: number;
+  adminSecret?: string;
+  feeLimit?: number;
+  apiKeyHeader: string;
 }
 
 function requireEnv(name: string): string {
@@ -25,6 +29,37 @@ function requireEnv(name: string): string {
   return v.trim();
 }
 
+function parseOptionalString(name: string): string | undefined {
+  const v = process.env[name];
+  if (!v) return undefined;
+  const t = v.trim();
+  return t.length ? t : undefined;
+}
+
+function parseLockTtl(): number {
+  const raw = process.env.LOCK_TTL_SECONDS;
+  if (!raw) return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < CONFIG.MIN_LOCK_TTL_SECONDS || n > CONFIG.MAX_LOCK_TTL_SECONDS) {
+    return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
+  }
+  return Math.floor(n);
+}
+
+function parseFeeLimit(): number | undefined {
+  const raw = process.env.FEE_LIMIT;
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
+function parseApiKeyHeader(): string {
+  const raw = process.env.API_KEY_HEADER;
+  if (!raw) return 'x-api-key';
+  const trimmed = raw.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : 'x-api-key';
+}
+
 /**
  * Load configuration from environment variables
  */
@@ -37,11 +72,13 @@ export function loadConfig(): ChannelAccountsConfig {
     });
   }
 
-  const fundRelayerId = requireEnv('FUND_RELAYER_ID');
-
   return {
-    fundRelayerId,
+    fundRelayerId: requireEnv('FUND_RELAYER_ID'),
     network: networkRaw as 'testnet' | 'mainnet',
+    lockTtlSeconds: parseLockTtl(),
+    adminSecret: parseOptionalString('PLUGIN_ADMIN_SECRET'),
+    feeLimit: parseFeeLimit(),
+    apiKeyHeader: parseApiKeyHeader(),
   };
 }
 
@@ -50,27 +87,4 @@ export function loadConfig(): ChannelAccountsConfig {
  */
 export function getNetworkPassphrase(network: 'testnet' | 'mainnet'): string {
   return network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
-}
-
-/**
- * Get the per-channel lock TTL in seconds (default 30)
- */
-export function getLockTtlSeconds(): number {
-  const raw = process.env.LOCK_TTL_SECONDS;
-  if (!raw) return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < CONFIG.MIN_LOCK_TTL_SECONDS || n > CONFIG.MAX_LOCK_TTL_SECONDS) {
-    return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
-  }
-  return Math.floor(n);
-}
-
-/**
- * Get the admin secret for management API
- */
-export function getAdminSecret(): string | undefined {
-  const v = process.env.PLUGIN_ADMIN_SECRET;
-  if (!v) return undefined;
-  const t = v.trim();
-  return t.length ? t : undefined;
 }

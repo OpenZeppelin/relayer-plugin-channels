@@ -5,7 +5,7 @@ import { FakeKV } from './helpers/fakeKV';
 describe('ChannelPool', () => {
   test('acquire distributes and release removes lock', async () => {
     const kv = new FakeKV();
-    const pool = new ChannelPool('testnet', kv as any);
+    const pool = new ChannelPool('testnet', kv as any, 30);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
 
     const l1 = await pool.acquire();
@@ -25,7 +25,7 @@ describe('ChannelPool', () => {
 
   test('acquire fails on empty membership', async () => {
     const kv = new FakeKV();
-    const pool = new ChannelPool('testnet', kv as any);
+    const pool = new ChannelPool('testnet', kv as any, 30);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: [] });
     await expect(pool.acquire()).rejects.toThrow('No channel accounts configured');
   });

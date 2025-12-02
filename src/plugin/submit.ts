@@ -14,6 +14,7 @@ import {
 } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS } from './constants';
 import { ChannelAccountsResponse } from './types';
+import { FeeTracker } from './fee-tracking';
 
 /**
  * Sign transaction with both channel and fund relayers
@@ -61,7 +62,8 @@ export async function submitWithFeeBumpAndWait(
   signedXdr: string,
   network: 'testnet' | 'mainnet',
   maxFee: number,
-  api: PluginAPI
+  api: PluginAPI,
+  tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
   console.debug(
@@ -85,6 +87,10 @@ export async function submitWithFeeBumpAndWait(
 
     // Check if transaction actually succeeded
     if (final.status === 'failed') {
+      // Track fee on on-chain failure (transaction was still submitted and consumed fees)
+      if (tracker) {
+        await tracker.trackConsumed(maxFee);
+      }
       throw pluginError(final.status_reason || 'Transaction failed', {
         code: 'ONCHAIN_FAILED',
         status: HTTP_STATUS.BAD_REQUEST,
@@ -95,6 +101,11 @@ export async function submitWithFeeBumpAndWait(
           hash: final.hash ?? null,
         },
       });
+    }
+
+    // Track fee on success
+    if (tracker) {
+      await tracker.trackConsumed(maxFee);
     }
 
     return {
@@ -108,7 +119,7 @@ export async function submitWithFeeBumpAndWait(
       throw error;
     }
 
-    // Otherwise, it's a timeout
+    // Otherwise, it's a timeout - don't track fees (status unknown)
     throw pluginError('Transaction wait timeout. It may still submit.', {
       code: 'WAIT_TIMEOUT',
       status: HTTP_STATUS.GATEWAY_TIMEOUT,

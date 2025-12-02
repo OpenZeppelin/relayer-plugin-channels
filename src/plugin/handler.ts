@@ -18,18 +18,25 @@ import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateAndBuildWithChannel } from './simulation';
 import { calculateMaxFee } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
+import { FeeTracker } from './fee-tracking';
+
+function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
+  const values = headers[headerName];
+  return values?.[0]?.trim() || undefined;
+}
 
 async function handleXdrSubmit(
   xdrStr: string,
   fundRelayer: Relayer,
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
-  api: PluginAPI
+  api: PluginAPI,
+  tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
   const validated = validateExistingTransactionForSubmitOnly(tx);
   const maxFee = calculateMaxFee(validated);
-  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api);
+  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
 }
 
 async function handleFuncAuthSubmit(
@@ -40,7 +47,8 @@ async function handleFuncAuthSubmit(
   fundRelayer: Relayer,
   fundAddress: string,
   network: 'testnet' | 'mainnet',
-  networkPassphrase: string
+  networkPassphrase: string,
+  tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   let poolLock: PoolLock | undefined;
   try {
@@ -83,7 +91,7 @@ async function handleFuncAuthSubmit(
     );
 
     const maxFee = calculateMaxFee(signedTx);
-    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api);
+    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
   } finally {
     if (poolLock) {
       await pool.release(poolLock);
@@ -92,7 +100,7 @@ async function handleFuncAuthSubmit(
 }
 
 async function channelAccounts(context: PluginContext): Promise<ChannelAccountsResponse> {
-  const { api, kv, params } = context;
+  const { api, kv, params, headers } = context;
 
   // Management branch: handle and return immediately
   if (isManagementRequest(params)) {
@@ -101,8 +109,23 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
 
   // Load config and initialize per-request dependencies
   const config = loadConfig();
-  const pool = new ChannelPool(config.network, kv);
+  const pool = new ChannelPool(config.network, kv, config.lockTtlSeconds);
   const networkPassphrase = getNetworkPassphrase(config.network);
+
+  // Fee tracking setup
+  let tracker: FeeTracker | undefined;
+
+  if (config.feeLimit !== undefined) {
+    const apiKey = getApiKey(headers, config.apiKeyHeader);
+    if (!apiKey) {
+      throw pluginError('API key required', {
+        code: 'API_KEY_REQUIRED',
+        status: HTTP_STATUS.UNAUTHORIZED,
+      });
+    }
+    tracker = new FeeTracker(kv, config.network, apiKey, config.feeLimit);
+    await tracker.checkLimit();
+  }
 
   try {
     // 1. Validate and parse request (xdr OR func+auth)
@@ -133,7 +156,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     // 3. Branch by request type
     if (request.type === 'xdr') {
       console.log(`[channels] Flow: XDR submit-only`);
-      return await handleXdrSubmit(request.xdr, fundRelayer as Relayer, config.network, networkPassphrase, api);
+      return await handleXdrSubmit(request.xdr, fundRelayer as Relayer, config.network, networkPassphrase, api, tracker);
     }
 
     console.log(`[channels] Flow: func+auth with channel account`);
@@ -145,7 +168,8 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       fundRelayer as Relayer,
       fundInfo.address,
       config.network,
-      networkPassphrase
+      networkPassphrase,
+      tracker
     );
   } finally {
     // Nothing to cleanup here; func-auth path releases locks internally

@@ -58,6 +58,9 @@ describe('ChannelsClient', () => {
       expect(Configuration).toHaveBeenCalledWith({
         basePath: 'https://relayer.example.com',
         accessToken: 'test-api-key',
+        baseOptions: {
+          headers: { 'x-api-key': 'test-api-key' },
+        },
       });
       expect(PluginsApi).toHaveBeenCalled();
     });

@@ -19,6 +19,7 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
 - [Management API](#management-api)
   - [List Channel Accounts](#list-channel-accounts)
   - [Set Channel Accounts](#set-channel-accounts)
+  - [Get Fee Usage](#get-fee-usage)
 - [Plugin Client](#plugin-client)
   - [Installation](#installation)
   - [Quick Start](#quick-start-1)
@@ -216,6 +217,10 @@ export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 # Optional environment variables
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 export MAX_FEE=1000000                  # default: 1,000,000 stroops
+
+# Fee tracking (optional)
+export FEE_LIMIT=1000000                # Max fee per API key in stroops (disabled if not set)
+export API_KEY_HEADER="x-api-key"       # Header name to extract API key (default: x-api-key)
 ```
 
 Your Relayer should now contain:
@@ -338,6 +343,34 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 {
   "ok": true,
   "appliedRelayerIds": ["channel-0001", "channel-0002", "channel-0003"]
+}
+```
+
+### Get Fee Usage
+
+Query fee consumption for a specific API key (requires `FEE_LIMIT` to be configured):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeUsage",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "apiKey": "client-api-key-to-query",
+  "consumed": 500000
 }
 ```
 
@@ -473,6 +506,16 @@ console.log(result.ok); // true
 console.log(result.appliedRelayerIds); // ['channel-001', 'channel-002', 'channel-003']
 ```
 
+#### Get Fee Usage (Management)
+
+```typescript
+// Query fee consumption for an API key (requires adminSecret)
+const usage = await adminClient.getFeeUsage('client-api-key');
+
+console.log(usage.apiKey); // 'client-api-key'
+console.log(usage.consumed); // 500000 (stroops)
+```
+
 ### Error Handling
 
 The client provides three types of errors:
@@ -527,6 +570,7 @@ import type {
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
+  GetFeeUsageResponse,
 } from '@openzeppelin/relayer-plugin-channels';
 ```
 
@@ -535,13 +579,14 @@ import type {
 ```typescript
 interface ChannelsClientConfig {
   // Required
-  baseUrl: string; // Service or Relayer URL
+  baseUrl: string; // Service URL
   apiKey: string; // API key for authentication
 
   // Optional
   pluginId?: string; // Include when connecting to a Relayer directly
   adminSecret?: string; // Required for management operations
   timeout?: number; // Request timeout in ms (default: 30000)
+  apiKeyHeader?: string; // Header name for API key (default: 'x-api-key')
 }
 ```
 
@@ -655,6 +700,11 @@ Plugin error example:
 - **Value**: `{ token: string, lockedAt: ISOString }`
 - **TTL**: Configured by `LOCK_TTL_SECONDS`.
 
+### Fee Tracking
+
+- **Key**: `<network>:api-key-fees:<apiKey>`
+- **Value**: `{ consumed: number }` (fees in stroops)
+
 ## Error Codes
 
 - `CONFIG_MISSING`: Missing required environment variable
@@ -672,6 +722,8 @@ Plugin error example:
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
+- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured (HTTP 401)
+- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
 
 ## License
 

@@ -54,4 +54,42 @@ describe('management', () => {
     } as any as PluginContext;
     await expect(handleManagement(ctx)).rejects.toThrow('Locked relayer IDs cannot be removed');
   });
+
+  test('getFeeUsage returns consumption', async () => {
+    const kv = new FakeKV();
+    await kv.set('testnet:api-key-fees:my-api-key', { consumed: 5000 });
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'getFeeUsage', apiKey: 'my-api-key' } },
+    } as any as PluginContext;
+
+    const result = await handleManagement(ctx);
+    expect(result.apiKey).toBe('my-api-key');
+    expect(result.consumed).toBe(5000);
+  });
+
+  test('getFeeUsage returns 0 for unknown key', async () => {
+    const kv = new FakeKV();
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'getFeeUsage', apiKey: 'unknown-key' } },
+    } as any as PluginContext;
+
+    const result = await handleManagement(ctx);
+    expect(result.apiKey).toBe('unknown-key');
+    expect(result.consumed).toBe(0);
+  });
+
+  test('getFeeUsage requires apiKey', async () => {
+    const kv = new FakeKV();
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'getFeeUsage' } },
+    } as any as PluginContext;
+
+    await expect(handleManagement(ctx)).rejects.toThrow('apiKey is required');
+  });
 });
