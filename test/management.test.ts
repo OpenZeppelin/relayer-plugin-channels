@@ -10,7 +10,6 @@ describe('management', () => {
     process.env = { ...OLD_ENV };
     process.env.PLUGIN_ADMIN_SECRET = 'test';
     process.env.STELLAR_NETWORK = 'testnet';
-    process.env.SOROBAN_RPC_URL = 'http://localhost:9999';
     process.env.FUND_RELAYER_ID = 'fund';
   });
   afterEach(() => {

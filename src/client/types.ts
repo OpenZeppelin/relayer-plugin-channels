@@ -120,6 +120,10 @@ export interface PluginResponseError {
   success: false;
   error: string;
   data?: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
 }
 
 /**

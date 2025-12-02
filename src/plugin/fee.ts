@@ -2,14 +2,12 @@
  * fee.ts
  *
  * Dynamic fee calculation for fee bump submissions.
- * - For Soroban transactions, use resourceFee + random inclusion fee
- * - For non-Soroban, add a fixed offset for safety
- * - Optionally clamp to env MAX_FEE via config helper
+ * - For Soroban transactions: use resourceFee + random inclusion fee
+ * - For non-Soroban: use NON_SOROBAN_FEE
  */
 
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { FEE } from './constants';
-import { getMaxFee } from './config';
 
 export function calculateMaxFee(transaction: Transaction): number {
   const envelope = transaction.toEnvelope();
@@ -23,19 +21,13 @@ export function calculateMaxFee(transaction: Transaction): number {
   }
 
   const baseInclusion = getRandomInt(FEE.MIN_BASE_FEE, FEE.MAX_BASE_FEE);
-  let dynamic =
-    resourceFee > 0n ? resourceFee + BigInt(baseInclusion) : BigInt(FEE.RESOURCE_FEE_OFFSET + baseInclusion);
 
-  // Optional cap from env
-  const cap = getMaxFee();
-  if (typeof cap === 'number' && Number.isFinite(cap) && cap > 0) {
-    if (dynamic > BigInt(cap)) dynamic = BigInt(cap);
-  }
+  const fee = resourceFee > 0n ? resourceFee + BigInt(baseInclusion) : BigInt(FEE.NON_SOROBAN_FEE + baseInclusion);
 
   console.debug(
-    `[channels] Calculated max_fee: ${Number(dynamic)} stroops (resourceFee: ${resourceFee}, baseInclusion: ${baseInclusion})`
+    `[channels] Calculated max_fee: ${Number(fee)} stroops (resourceFee: ${resourceFee}, baseInclusion: ${baseInclusion})`
   );
-  return Number(dynamic);
+  return Number(fee);
 }
 
 function getRandomInt(min: number, max: number): number {

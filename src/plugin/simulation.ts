@@ -6,8 +6,8 @@
  * transaction with sorobanData and correct fee set to the resource fee.
  */
 
-import { Account, Operation, SorobanRpc, Transaction, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
-import { pluginError } from '@openzeppelin/relayer-sdk';
+import { Account, Operation, rpc, Transaction, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
+import { JsonRpcResponseNetworkRpcResult, pluginError, Relayer } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS, SIMULATION } from './constants';
 
 export interface ChannelAccount {
@@ -20,7 +20,7 @@ export async function simulateAndBuildWithChannel(
   auth: xdr.SorobanAuthorizationEntry[] | undefined,
   channel: ChannelAccount,
   _fundAddress: string,
-  rpc: SorobanRpc.Server,
+  relayer: Relayer,
   networkPassphrase: string
 ): Promise<Transaction> {
   const now = Math.floor(Date.now() / 1000);
@@ -43,17 +43,60 @@ export async function simulateAndBuildWithChannel(
     )
     .build();
 
-  // Prepare transaction (attaches sorobanData/resources, preserves provided auth)
+  let rpcResponse: JsonRpcResponseNetworkRpcResult;
   try {
-    const prepared = await rpc.prepareTransaction(transaction);
+    rpcResponse = await relayer.rpc({
+      jsonrpc: '2.0',
+      id: Math.floor(Math.random() * 1e8).toString(),
+      method: 'simulateTransaction',
+      params: {
+        transaction: transaction.toXDR(),
+      },
+    });
+  } catch (err: any) {
+    throw pluginError('Simulation network request failed', {
+      code: 'SIMULATION_NETWORK_ERROR',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: {
+        message: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+
+  if (rpcResponse.error) {
+    const { code, message, description, data } = rpcResponse.error as any;
+    throw pluginError('Simulation RPC execution failed', {
+      code: 'SIMULATION_RPC_FAILURE',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: {
+        rpcCode: code,
+        message,
+        description: description || data,
+      },
+    });
+  }
+
+  try {
+    // Format simulation result for SDK's assembleTransaction
+    const simResult = {
+      id: String(rpcResponse.id ?? '1'),
+      ...(rpcResponse.result as object),
+    } as rpc.Api.RawSimulateTransactionResponse;
+    console.debug(`[channels] Simulation result:`, JSON.stringify(simResult, null, 2));
+
+    // Use SDK's assembleTransaction to apply simulation results
+    const prepared = rpc.assembleTransaction(transaction, simResult).build() as Transaction;
+
     const resourceFee = prepared.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
     console.debug(`[channels] Simulation complete: resourceFee=${resourceFee}`);
-    return prepared as Transaction;
-  } catch (e: any) {
-    throw pluginError('Simulation failed', {
+    return prepared;
+  } catch (err: any) {
+    throw pluginError('Simulation result processing failed', {
       code: 'SIMULATION_FAILED',
-      status: HTTP_STATUS.BAD_REQUEST,
-      details: { error: e instanceof Error ? e.message : String(e) },
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+      details: {
+        message: err instanceof Error ? err.message : String(err),
+      },
     });
   }
 }
