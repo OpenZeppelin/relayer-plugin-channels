@@ -90,6 +90,6 @@ describe('management', () => {
       params: { management: { adminSecret: 'test', action: 'getFeeUsage' } },
     } as any as PluginContext;
 
-    await expect(handleManagement(ctx)).rejects.toThrow('apiKey is required');
+    await expect(handleManagement(ctx)).rejects.toThrow('Invalid payload: apiKey is required');
   });
 });

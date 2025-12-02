@@ -65,6 +65,31 @@ describe('ChannelsClient', () => {
       expect(PluginsApi).toHaveBeenCalled();
     });
 
+    test('should configure relayer connection with custom apiKeyHeader', () => {
+      const mockPluginsApi = {
+        callPlugin: vi.fn(),
+      };
+      (PluginsApi as any).mockImplementation(function (this: any) {
+        return mockPluginsApi;
+      });
+
+      new ChannelsClient({
+        pluginId: 'test-plugin-id',
+        apiKey: 'test-api-key',
+        baseUrl: 'https://relayer.example.com',
+        apiKeyHeader: 'x-custom-api-key',
+      });
+
+      expect(Configuration).toHaveBeenCalledWith({
+        basePath: 'https://relayer.example.com',
+        accessToken: 'test-api-key',
+        baseOptions: {
+          headers: { 'x-custom-api-key': 'test-api-key' },
+        },
+      });
+      expect(PluginsApi).toHaveBeenCalled();
+    });
+
     test('should throw error when baseUrl is missing without pluginId', () => {
       expect(() => {
         new ChannelsClient({

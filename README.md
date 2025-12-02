@@ -348,7 +348,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 
 ### Get Fee Usage
 
-Query fee consumption for a specific API key (requires `FEE_LIMIT` to be configured):
+Query fee consumption for a specific API key:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
