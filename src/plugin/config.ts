@@ -14,6 +14,7 @@ export interface ChannelAccountsConfig {
   lockTtlSeconds: number;
   adminSecret?: string;
   feeLimit?: number;
+  feeResetPeriodMs?: number;
   apiKeyHeader: string;
 }
 
@@ -53,6 +54,13 @@ function parseFeeLimit(): number | undefined {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
 }
 
+function parseFeeResetPeriod(): number | undefined {
+  const raw = process.env.FEE_RESET_PERIOD_SECONDS;
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) * 1000 : undefined;
+}
+
 function parseApiKeyHeader(): string {
   const raw = process.env.API_KEY_HEADER;
   if (!raw) return 'x-api-key';
@@ -78,6 +86,7 @@ export function loadConfig(): ChannelAccountsConfig {
     lockTtlSeconds: parseLockTtl(),
     adminSecret: parseOptionalString('PLUGIN_ADMIN_SECRET'),
     feeLimit: parseFeeLimit(),
+    feeResetPeriodMs: parseFeeResetPeriod(),
     apiKeyHeader: parseApiKeyHeader(),
   };
 }

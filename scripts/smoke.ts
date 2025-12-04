@@ -315,8 +315,18 @@ async function main() {
     try {
       const usage = await client.getFeeUsage(apiKey);
       console.log(`   API Key: ${usage.apiKey}`);
-      console.log(`   Consumed: ${usage.consumed.toLocaleString()} stroops`);
-      console.log(`   Consumed: ${(usage.consumed / 10_000_000).toFixed(7)} XLM`);
+      console.log(`   Consumed: ${usage.consumed.toLocaleString()} stroops (${(usage.consumed / 10_000_000).toFixed(7)} XLM)`);
+      if (usage.limit !== undefined) {
+        console.log(`   Limit: ${usage.limit.toLocaleString()} stroops (${(usage.limit / 10_000_000).toFixed(7)} XLM)`);
+        console.log(`   Remaining: ${usage.remaining?.toLocaleString() ?? 0} stroops (${((usage.remaining ?? 0) / 10_000_000).toFixed(7)} XLM)`);
+      } else {
+        console.log(`   Limit: unlimited`);
+      }
+      if (usage.periodStart !== undefined) {
+        const periodStart = new Date(usage.periodStart).toISOString();
+        const periodEndsAt = usage.periodEndsAt ? new Date(usage.periodEndsAt).toISOString() : 'N/A';
+        console.log(`   Period: ${periodStart} → ${periodEndsAt}`);
+      }
     } catch (err: any) {
       console.error(`   ❌ Failed to fetch fee usage: ${err?.message || err}`);
     }

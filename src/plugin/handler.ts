@@ -36,6 +36,7 @@ async function handleXdrSubmit(
   const tx = new Transaction(xdrStr, networkPassphrase);
   const validated = validateExistingTransactionForSubmitOnly(tx);
   const maxFee = calculateMaxFee(validated);
+  await tracker?.checkBudget(maxFee);
   return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
 }
 
@@ -91,6 +92,7 @@ async function handleFuncAuthSubmit(
     );
 
     const maxFee = calculateMaxFee(signedTx);
+    await tracker?.checkBudget(maxFee);
     return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
   } finally {
     if (poolLock) {
@@ -114,17 +116,25 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
 
   // Fee tracking setup
   let tracker: FeeTracker | undefined;
+  const apiKey = getApiKey(headers, config.apiKeyHeader);
 
-  if (config.feeLimit !== undefined) {
-    const apiKey = getApiKey(headers, config.apiKeyHeader);
-    if (!apiKey) {
-      throw pluginError('API key required', {
-        code: 'API_KEY_REQUIRED',
-        status: HTTP_STATUS.UNAUTHORIZED,
-      });
-    }
-    tracker = new FeeTracker(kv, config.network, apiKey, config.feeLimit);
-    await tracker.checkLimit();
+  // If default limit is set, require API key
+  if (config.feeLimit !== undefined && !apiKey) {
+    throw pluginError('API key required', {
+      code: 'API_KEY_REQUIRED',
+      status: HTTP_STATUS.UNAUTHORIZED,
+    });
+  }
+
+  // Create tracker if API key is present (for tracking and custom limits)
+  if (apiKey) {
+    tracker = new FeeTracker({
+      kv,
+      network: config.network,
+      apiKey,
+      defaultLimit: config.feeLimit,
+      resetPeriodMs: config.feeResetPeriodMs,
+    });
   }
 
   try {

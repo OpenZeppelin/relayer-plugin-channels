@@ -87,9 +87,9 @@ export async function submitWithFeeBumpAndWait(
 
     // Check if transaction actually succeeded
     if (final.status === 'failed') {
-      // Track fee on on-chain failure (transaction was still submitted and consumed fees)
+      // Record fee on on-chain failure (transaction was still submitted and consumed fees)
       if (tracker) {
-        await tracker.trackConsumed(maxFee);
+        await tracker.recordUsage(maxFee);
       }
       throw pluginError(final.status_reason || 'Transaction failed', {
         code: 'ONCHAIN_FAILED',
@@ -103,9 +103,9 @@ export async function submitWithFeeBumpAndWait(
       });
     }
 
-    // Track fee on success
+    // Record fee on success
     if (tracker) {
-      await tracker.trackConsumed(maxFee);
+      await tracker.recordUsage(maxFee);
     }
 
     return {

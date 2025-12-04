@@ -1,9 +1,13 @@
 /**
  * management.ts
  *
- * Payload-based management API for channel relayerIds.
+ * Payload-based management API for channel relayerIds and fee limits.
  * - listChannelAccounts: returns relayerIds from KV
  * - setChannelAccounts: replaces relayerIds array in KV (checks lock conflicts)
+ * - getFeeUsage: returns fee consumption for an API key
+ * - getFeeLimit: returns custom limit for an API key (if set)
+ * - setFeeLimit: sets custom limit for an API key
+ * - deleteFeeLimit: removes custom limit for an API key
  */
 
 import type { PluginContext, PluginKVStore } from '@openzeppelin/relayer-sdk';
@@ -52,7 +56,13 @@ export async function handleManagement(context: PluginContext): Promise<any> {
     case 'setChannelAccounts':
       return await setChannelAccounts(kv, config.network, m);
     case 'getFeeUsage':
-      return await getFeeUsage(kv, config.network, m);
+      return await getFeeUsage(kv, config.network, config.feeLimit, config.feeResetPeriodMs, m);
+    case 'getFeeLimit':
+      return await getFeeLimit(kv, config.network, config.feeLimit, m);
+    case 'setFeeLimit':
+      return await setFeeLimit(kv, config.network, m);
+    case 'deleteFeeLimit':
+      return await deleteFeeLimit(kv, config.network, m);
     default:
       throw pluginError('Invalid management action', { code: 'INVALID_ACTION', status: HTTP_STATUS.BAD_REQUEST });
   }
@@ -72,7 +82,13 @@ async function listChannelAccounts(kv: PluginKVStore, network: 'testnet' | 'main
   }
 }
 
-async function getFeeUsage(kv: PluginKVStore, network: 'testnet' | 'mainnet', payload: any): Promise<any> {
+async function getFeeUsage(
+  kv: PluginKVStore,
+  network: 'testnet' | 'mainnet',
+  defaultLimit: number | undefined,
+  resetPeriodMs: number | undefined,
+  payload: any
+): Promise<any> {
   const apiKey = payload?.apiKey;
   if (!apiKey || typeof apiKey !== 'string') {
     throw pluginError('Invalid payload: apiKey is required', {
@@ -82,10 +98,94 @@ async function getFeeUsage(kv: PluginKVStore, network: 'testnet' | 'mainnet', pa
   }
 
   try {
-    const consumed = await FeeTracker.getConsumed(kv, network, apiKey);
-    return { apiKey, consumed };
+    const tracker = new FeeTracker({ kv, network, apiKey, defaultLimit, resetPeriodMs });
+    const usage = await tracker.getUsageInfo();
+    return { apiKey, ...usage };
   } catch (e: any) {
     throw pluginError('KV error while reading fee usage', {
+      code: 'KV_ERROR',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+    });
+  }
+}
+
+async function getFeeLimit(
+  kv: PluginKVStore,
+  network: 'testnet' | 'mainnet',
+  defaultLimit: number | undefined,
+  payload: any
+): Promise<any> {
+  const apiKey = payload?.apiKey;
+  if (!apiKey || typeof apiKey !== 'string') {
+    throw pluginError('Invalid payload: apiKey is required', {
+      code: 'INVALID_PAYLOAD',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
+
+  try {
+    const tracker = new FeeTracker({ kv, network, apiKey, defaultLimit });
+    const customLimit = await tracker.getCustomLimit();
+    return {
+      apiKey,
+      customLimit,
+      defaultLimit,
+      effectiveLimit: customLimit ?? defaultLimit,
+    };
+  } catch (e: any) {
+    throw pluginError('KV error while reading fee limit', {
+      code: 'KV_ERROR',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+    });
+  }
+}
+
+async function setFeeLimit(kv: PluginKVStore, network: 'testnet' | 'mainnet', payload: any): Promise<any> {
+  const apiKey = payload?.apiKey;
+  const limit = payload?.limit;
+
+  if (!apiKey || typeof apiKey !== 'string') {
+    throw pluginError('Invalid payload: apiKey is required', {
+      code: 'INVALID_PAYLOAD',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
+
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 0) {
+    throw pluginError('Invalid payload: limit must be a non-negative number', {
+      code: 'INVALID_PAYLOAD',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
+
+  try {
+    const tracker = new FeeTracker({ kv, network, apiKey });
+    await tracker.setCustomLimit(Math.floor(limit));
+    return { ok: true, apiKey, limit: Math.floor(limit) };
+  } catch (e: any) {
+    throw pluginError('KV error while setting fee limit', {
+      code: 'KV_ERROR',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+    });
+  }
+}
+
+async function deleteFeeLimit(kv: PluginKVStore, network: 'testnet' | 'mainnet', payload: any): Promise<any> {
+  const apiKey = payload?.apiKey;
+
+  if (!apiKey || typeof apiKey !== 'string') {
+    throw pluginError('Invalid payload: apiKey is required', {
+      code: 'INVALID_PAYLOAD',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
+
+  try {
+    const tracker = new FeeTracker({ kv, network, apiKey });
+    await tracker.deleteCustomLimit();
+    return { ok: true, apiKey };
+  } catch (e: any) {
+    throw pluginError('KV error while deleting fee limit', {
       code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
     });

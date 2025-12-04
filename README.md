@@ -20,6 +20,9 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
   - [List Channel Accounts](#list-channel-accounts)
   - [Set Channel Accounts](#set-channel-accounts)
   - [Get Fee Usage](#get-fee-usage)
+  - [Get Fee Limit](#get-fee-limit)
+  - [Set Fee Limit](#set-fee-limit)
+  - [Delete Fee Limit](#delete-fee-limit)
 - [Plugin Client](#plugin-client)
   - [Installation](#installation)
   - [Quick Start](#quick-start-1)
@@ -219,8 +222,9 @@ export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 export MAX_FEE=1000000                  # default: 1,000,000 stroops
 
 # Fee tracking (optional)
-export FEE_LIMIT=1000000                # Max fee per API key in stroops (disabled if not set)
-export API_KEY_HEADER="x-api-key"       # Header name to extract API key (default: x-api-key)
+export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set)
+export FEE_RESET_PERIOD_SECONDS=86400     # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
+export API_KEY_HEADER="x-api-key"         # Header name to extract API key (default: x-api-key)
 ```
 
 Your Relayer should now contain:
@@ -370,7 +374,104 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 ```json
 {
   "apiKey": "client-api-key-to-query",
-  "consumed": 500000
+  "consumed": 500000,
+  "limit": 1000000,
+  "remaining": 500000,
+  "periodStart": 1701619200000,
+  "periodEndsAt": 1701705600000
+}
+```
+
+- `limit`: Effective fee limit (custom if set, otherwise default)
+- `remaining`: Remaining fee budget in stroops
+- `periodStart`: Unix timestamp (ms) when current period started (if reset period configured)
+- `periodEndsAt`: Unix timestamp (ms) when period will reset (if reset period configured)
+
+### Get Fee Limit
+
+Query fee limit configuration for a specific API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "apiKey": "client-api-key-to-query",
+  "customLimit": 500000,
+  "defaultLimit": 1000000,
+  "effectiveLimit": 500000
+}
+```
+
+### Set Fee Limit
+
+Set a custom fee limit for a specific API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key",
+        "limit": 500000
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "apiKey": "client-api-key",
+  "limit": 500000
+}
+```
+
+### Delete Fee Limit
+
+Remove a custom fee limit for a specific API key (reverts to default limit):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "deleteFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "apiKey": "client-api-key"
 }
 ```
 
@@ -514,6 +615,40 @@ const usage = await adminClient.getFeeUsage('client-api-key');
 
 console.log(usage.apiKey); // 'client-api-key'
 console.log(usage.consumed); // 500000 (stroops)
+console.log(usage.limit); // 1000000 (effective limit)
+console.log(usage.remaining); // 500000 (remaining budget)
+console.log(usage.periodStart); // Unix timestamp when period started
+console.log(usage.periodEndsAt); // Unix timestamp when period resets
+```
+
+#### Get Fee Limit (Management)
+
+```typescript
+// Query fee limit configuration for an API key (requires adminSecret)
+const limitInfo = await adminClient.getFeeLimit('client-api-key');
+
+console.log(limitInfo.customLimit); // 500000 (custom limit, if set)
+console.log(limitInfo.defaultLimit); // 1000000 (default from env)
+console.log(limitInfo.effectiveLimit); // 500000 (custom ?? default)
+```
+
+#### Set Fee Limit (Management)
+
+```typescript
+// Set a custom fee limit for an API key (requires adminSecret)
+const result = await adminClient.setFeeLimit('client-api-key', 500000);
+
+console.log(result.ok); // true
+console.log(result.limit); // 500000
+```
+
+#### Delete Fee Limit (Management)
+
+```typescript
+// Remove custom fee limit, revert to default (requires adminSecret)
+const result = await adminClient.deleteFeeLimit('client-api-key');
+
+console.log(result.ok); // true
 ```
 
 ### Error Handling
@@ -571,6 +706,9 @@ import type {
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
   GetFeeUsageResponse,
+  GetFeeLimitResponse,
+  SetFeeLimitResponse,
+  DeleteFeeLimitResponse,
 } from '@openzeppelin/relayer-plugin-channels';
 ```
 
@@ -703,7 +841,12 @@ Plugin error example:
 ### Fee Tracking
 
 - **Key**: `<network>:api-key-fees:<apiKey>`
-- **Value**: `{ consumed: number }` (fees in stroops)
+- **Value**: `{ consumed: number, periodStart?: number }` (fees in stroops, period start timestamp in ms)
+
+### Custom Fee Limits
+
+- **Key**: `<network>:api-key-limit:<apiKey>`
+- **Value**: `{ limit: number }` (custom fee limit in stroops)
 
 ## Error Codes
 

@@ -400,6 +400,249 @@ describe('ChannelsClient', () => {
     });
   });
 
+  describe('getFeeUsage', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+        adminSecret: 'admin-secret',
+      });
+    });
+
+    test('should get fee usage successfully', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            apiKey: 'client-key-123',
+            consumed: 500000,
+            limit: 1000000,
+            remaining: 500000,
+          },
+        },
+      });
+
+      const result = await client.getFeeUsage('client-key-123');
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          management: {
+            action: 'getFeeUsage',
+            adminSecret: 'admin-secret',
+            apiKey: 'client-key-123',
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        apiKey: 'client-key-123',
+        consumed: 500000,
+        limit: 1000000,
+        remaining: 500000,
+      });
+    });
+
+    test('should throw error when adminSecret is not provided', async () => {
+      const clientWithoutSecret = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+
+      await expect(clientWithoutSecret.getFeeUsage('client-key-123')).rejects.toThrow(
+        'adminSecret required for management operations'
+      );
+    });
+  });
+
+  describe('getFeeLimit', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+        adminSecret: 'admin-secret',
+      });
+    });
+
+    test('should get fee limit successfully', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            apiKey: 'client-key-123',
+            customLimit: 5000000,
+            defaultLimit: 1000000,
+            effectiveLimit: 5000000,
+          },
+        },
+      });
+
+      const result = await client.getFeeLimit('client-key-123');
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          management: {
+            action: 'getFeeLimit',
+            adminSecret: 'admin-secret',
+            apiKey: 'client-key-123',
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        apiKey: 'client-key-123',
+        customLimit: 5000000,
+        defaultLimit: 1000000,
+        effectiveLimit: 5000000,
+      });
+    });
+
+    test('should throw error when adminSecret is not provided', async () => {
+      const clientWithoutSecret = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+
+      await expect(clientWithoutSecret.getFeeLimit('client-key-123')).rejects.toThrow(
+        'adminSecret required for management operations'
+      );
+    });
+  });
+
+  describe('setFeeLimit', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+        adminSecret: 'admin-secret',
+      });
+    });
+
+    test('should set fee limit successfully', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            ok: true,
+            apiKey: 'client-key-123',
+            limit: 5000000,
+          },
+        },
+      });
+
+      const result = await client.setFeeLimit('client-key-123', 5000000);
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          management: {
+            action: 'setFeeLimit',
+            adminSecret: 'admin-secret',
+            apiKey: 'client-key-123',
+            limit: 5000000,
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        apiKey: 'client-key-123',
+        limit: 5000000,
+      });
+    });
+
+    test('should throw error when adminSecret is not provided', async () => {
+      const clientWithoutSecret = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+
+      await expect(clientWithoutSecret.setFeeLimit('client-key-123', 5000000)).rejects.toThrow(
+        'adminSecret required for management operations'
+      );
+    });
+  });
+
+  describe('deleteFeeLimit', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+        adminSecret: 'admin-secret',
+      });
+    });
+
+    test('should delete fee limit successfully', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            ok: true,
+            apiKey: 'client-key-123',
+          },
+        },
+      });
+
+      const result = await client.deleteFeeLimit('client-key-123');
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          management: {
+            action: 'deleteFeeLimit',
+            adminSecret: 'admin-secret',
+            apiKey: 'client-key-123',
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        apiKey: 'client-key-123',
+      });
+    });
+
+    test('should throw error when adminSecret is not provided', async () => {
+      const clientWithoutSecret = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+
+      await expect(clientWithoutSecret.deleteFeeLimit('client-key-123')).rejects.toThrow(
+        'adminSecret required for management operations'
+      );
+    });
+  });
+
   describe('Error Handling', () => {
     let client: ChannelsClient;
     let mockAxiosInstance: any;

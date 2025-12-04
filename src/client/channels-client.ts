@@ -10,6 +10,9 @@ import type {
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
   GetFeeUsageResponse,
+  GetFeeLimitResponse,
+  SetFeeLimitResponse,
+  DeleteFeeLimitResponse,
   PluginResponse,
 } from './types';
 
@@ -176,6 +179,56 @@ export class ChannelsClient {
     return this.call<GetFeeUsageResponse>({
       management: {
         action: 'getFeeUsage',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+      },
+    });
+  }
+
+  /**
+   * Get fee limit configuration for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to query fee limit for
+   * @returns Fee limit data including custom, default, and effective limits
+   */
+  async getFeeLimit(apiKey: string): Promise<GetFeeLimitResponse> {
+    return this.call<GetFeeLimitResponse>({
+      management: {
+        action: 'getFeeLimit',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+      },
+    });
+  }
+
+  /**
+   * Set a custom fee limit for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to set the limit for
+   * @param limit The fee limit in stroops
+   * @returns Confirmation with the applied limit
+   */
+  async setFeeLimit(apiKey: string, limit: number): Promise<SetFeeLimitResponse> {
+    return this.call<SetFeeLimitResponse>({
+      management: {
+        action: 'setFeeLimit',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+        limit,
+      },
+    });
+  }
+
+  /**
+   * Delete a custom fee limit for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to remove the custom limit for
+   * @returns Confirmation of deletion
+   */
+  async deleteFeeLimit(apiKey: string): Promise<DeleteFeeLimitResponse> {
+    return this.call<DeleteFeeLimitResponse>({
+      management: {
+        action: 'deleteFeeLimit',
         adminSecret: this.requireAdminSecret(),
         apiKey,
       },
