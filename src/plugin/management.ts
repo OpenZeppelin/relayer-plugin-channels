@@ -16,16 +16,6 @@ import { loadConfig } from './config';
 import { HTTP_STATUS } from './constants';
 import { FeeTracker } from './fee-tracking';
 
-function timingSafeEqual(a: string, b: string): boolean {
-  // Basic constant-time comparison without crypto dep
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
-
 export function isManagementRequest(params: any): boolean {
   return Boolean(
     params && typeof params === 'object' && (params as any).management && typeof (params as any).management === 'object',
@@ -45,7 +35,7 @@ export async function handleManagement(context: PluginContext): Promise<any> {
 
   const m = params?.management || {};
   const provided = (m.adminSecret ?? '').toString();
-  if (!provided || !timingSafeEqual(provided, config.adminSecret)) {
+  if (!provided || provided !== config.adminSecret) {
     throw pluginError('Unauthorized', { code: 'UNAUTHORIZED', status: HTTP_STATUS.UNAUTHORIZED });
   }
 

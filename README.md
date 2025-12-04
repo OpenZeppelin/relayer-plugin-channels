@@ -442,6 +442,8 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 }
 ```
 
+Note: If custom limit is set to 0 it will block all transactions
+
 ### Delete Fee Limit
 
 Remove a custom fee limit for a specific API key (reverts to default limit):

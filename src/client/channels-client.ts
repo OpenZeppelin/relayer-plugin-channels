@@ -189,7 +189,11 @@ export class ChannelsClient {
    * Get fee limit configuration for a specific API key (requires adminSecret)
    *
    * @param apiKey The client API key to query fee limit for
-   * @returns Fee limit data including custom, default, and effective limits
+   * @returns Fee limit data
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
    */
   async getFeeLimit(apiKey: string): Promise<GetFeeLimitResponse> {
     return this.call<GetFeeLimitResponse>({
@@ -205,8 +209,12 @@ export class ChannelsClient {
    * Set a custom fee limit for a specific API key (requires adminSecret)
    *
    * @param apiKey The client API key to set the limit for
-   * @param limit The fee limit in stroops
+   * @param limit The fee limit in stroops (0 blocks all transactions)
    * @returns Confirmation with the applied limit
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
    */
   async setFeeLimit(apiKey: string, limit: number): Promise<SetFeeLimitResponse> {
     return this.call<SetFeeLimitResponse>({
@@ -224,6 +232,10 @@ export class ChannelsClient {
    *
    * @param apiKey The client API key to remove the custom limit for
    * @returns Confirmation of deletion
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
    */
   async deleteFeeLimit(apiKey: string): Promise<DeleteFeeLimitResponse> {
     return this.call<DeleteFeeLimitResponse>({
