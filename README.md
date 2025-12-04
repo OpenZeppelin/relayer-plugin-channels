@@ -219,7 +219,6 @@ export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 
 # Optional environment variables
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
-export MAX_FEE=1000000                  # default: 1,000,000 stroops
 
 # Fee tracking (optional)
 export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set)
@@ -858,7 +857,7 @@ Plugin error example:
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
-- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured (HTTP 401)
+- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured (HTTP 403)
 - `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
 
 ## License

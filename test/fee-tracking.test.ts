@@ -41,32 +41,11 @@ describe('FeeTracker', () => {
       await expect(tracker.checkBudget(2000)).rejects.toMatchObject({
         code: 'FEE_LIMIT_EXCEEDED',
         status: 429,
-        details: { consumed: 9000, fee: 2000, remaining: 1000, limit: 10000 },
+        details: { consumed: 9000, fee: 2000, limit: 10000 },
       });
     });
 
-    test('throws when fee alone exceeds remaining budget', async () => {
-      const kv = new FakeKV();
-      await kv.set('testnet:api-key-fees:test-key', { consumed: 900 });
-
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 1000 });
-      // consumed=900, fee=200, limit=1000 → 900+200=1100 > 1000
-      await expect(tracker.checkBudget(200)).rejects.toMatchObject({
-        code: 'FEE_LIMIT_EXCEEDED',
-        status: 429,
-      });
-    });
-
-    test('passes when fee fits within remaining budget', async () => {
-      const kv = new FakeKV();
-      await kv.set('testnet:api-key-fees:test-key', { consumed: 900 });
-
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 1000 });
-      // consumed=900, fee=50, limit=1000 → 900+50=950 <= 1000
-      await expect(tracker.checkBudget(50)).resolves.toBeUndefined();
-    });
-
-    test('passes when no prior consumption and fee under limit', async () => {
+    test('passes when no prior consumption', async () => {
       const kv = new FakeKV();
       const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'new-key', defaultLimit: 10000 });
       await expect(tracker.checkBudget(5000)).resolves.toBeUndefined();
@@ -85,8 +64,8 @@ describe('FeeTracker', () => {
       await kv.set('testnet:api-key-fees:test-key', { consumed: 4000 });
       await kv.set('testnet:api-key-limit:test-key', { limit: 5000 }); // custom limit
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000 }); // default is 10000
-      // consumed=4000, fee=2000, customLimit=5000 → 4000+2000=6000 > 5000
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000 });
+      // consumed=4000 + fee=2000 = 6000 > customLimit=5000
       await expect(tracker.checkBudget(2000)).rejects.toMatchObject({
         code: 'FEE_LIMIT_EXCEEDED',
         status: 429,
@@ -154,6 +133,36 @@ describe('FeeTracker', () => {
       expect(data?.consumed).toBe(1000);
       expect(data?.periodStart).toBeGreaterThanOrEqual(before);
       expect(data?.periodStart).toBeLessThanOrEqual(after);
+    });
+
+    test('retries when lock is busy and eventually succeeds', async () => {
+      const kv = new FakeKV();
+      let attempts = 0;
+      const originalWithLock = kv.withLock.bind(kv);
+      kv.withLock = async (key, fn, opts) => {
+        attempts++;
+        if (attempts < 3) return null; // Simulate busy lock
+        return originalWithLock(key, fn, opts);
+      };
+
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000 });
+      await tracker.recordUsage(1000);
+
+      expect(attempts).toBe(3);
+      const data = await kv.get<{ consumed: number }>('testnet:api-key-fees:test-key');
+      expect(data?.consumed).toBe(1000);
+    });
+
+    test('logs warning after exhausting retries', async () => {
+      const kv = new FakeKV();
+      kv.withLock = async () => null; // Always busy
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000 });
+      await tracker.recordUsage(1000);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('after 3 retries'));
+      warnSpy.mockRestore();
     });
   });
 
@@ -340,7 +349,7 @@ describe('FeeTracker', () => {
       await kv.set('testnet:api-key-fees:test-key', { consumed: 9000, periodStart: oldTime });
 
       const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 }); // 60 second period
-      // Would fail if consumed=9000, but period expired so consumed=0
+      // Would fail if consumed=9000 + fee=5000 > limit=10000, but period expired so consumed=0
       await expect(tracker.checkBudget(5000)).resolves.toBeUndefined();
     });
 

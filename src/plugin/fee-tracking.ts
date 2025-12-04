@@ -79,21 +79,36 @@ export class FeeTracker {
   }
 
   /**
-   * Record fee consumption after successful transaction.
+   * Record fee consumption after transaction.
+   * Uses distributed lock for atomicity with retry.
    * Errors are logged but not thrown (non-blocking).
    */
   async recordUsage(fee: number): Promise<void> {
-    try {
-      const state = await this.getFeeState();
-      const now = Date.now();
-
-      await this.kv.set(this.consumedKey, {
-        consumed: state.consumed + fee,
-        periodStart: state.periodStart ?? now,
-      });
-    } catch (err) {
-      console.warn(`[channels] Failed to record fee: ${err}`);
+    const maxRetries = 3;
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const result = await this.kv.withLock(
+          this.lockKey,
+          async () => {
+            const state = await this.getFeeState();
+            const now = Date.now();
+            await this.kv.set(this.consumedKey, {
+              consumed: state.consumed + fee,
+              periodStart: state.periodStart ?? now,
+            });
+            return true;
+          },
+          { ttlSec: 5, onBusy: 'skip' }
+        );
+        if (result !== null) return;
+        // Lock busy, retry with jitter
+        await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
+      } catch (err) {
+        console.warn(`[channels] Failed to record fee: ${err}`);
+        return;
+      }
     }
+    console.warn(`[channels] Failed to record fee after ${maxRetries} retries (lock contention)`);
   }
 
   /**
@@ -173,5 +188,9 @@ export class FeeTracker {
 
   private get limitKey(): string {
     return `${this.network}:api-key-limit:${this.apiKey}`;
+  }
+
+  private get lockKey(): string {
+    return `${this.network}:fee-lock:${this.apiKey}`;
   }
 }

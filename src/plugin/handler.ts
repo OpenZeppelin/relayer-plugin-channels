@@ -122,7 +122,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   if (config.feeLimit !== undefined && !apiKey) {
     throw pluginError('API key required', {
       code: 'API_KEY_REQUIRED',
-      status: HTTP_STATUS.UNAUTHORIZED,
+      status: HTTP_STATUS.BAD_REQUEST,
     });
   }
 

@@ -52,12 +52,7 @@ export class ChannelPool {
 
   // Run a function under the short-lived global mutex; returns null if busy
   private async withGlobalMutex<T>(fn: () => Promise<T>): Promise<T | null> {
-    const r = (await (this.kv as any).withLock(
-      this.globalLockKey,
-      fn,
-      { ttlSec: this.mutexTtlSec, onBusy: 'skip' },
-    )) as T | null;
-    return r;
+    return this.kv.withLock(this.globalLockKey, fn, { ttlSec: this.mutexTtlSec, onBusy: 'skip' });
   }
 
   // Inside the mutex: pick an available relayer and set its channel lock
