@@ -201,8 +201,8 @@ describe('FeeTracker', () => {
       const usage = await tracker.getUsageInfo();
 
       expect(usage.consumed).toBe(3000);
-      expect(usage.periodStart).toBe(periodStart);
-      expect(usage.periodEndsAt).toBe(periodStart + 60000);
+      expect(usage.periodStartAt).toBe(new Date(periodStart).toISOString());
+      expect(usage.periodEndsAt).toBe(new Date(periodStart + 60000).toISOString());
     });
 
     test('uses custom limit over default', async () => {
@@ -352,7 +352,7 @@ describe('FeeTracker', () => {
       const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 });
       const usage = await tracker.getUsageInfo();
       expect(usage.consumed).toBe(0);
-      expect(usage.periodStart).toBeUndefined();
+      expect(usage.periodStartAt).toBeUndefined();
       expect(usage.periodEndsAt).toBeUndefined();
     });
   });

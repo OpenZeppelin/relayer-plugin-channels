@@ -373,19 +373,18 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 
 ```json
 {
-  "apiKey": "client-api-key-to-query",
   "consumed": 500000,
   "limit": 1000000,
   "remaining": 500000,
-  "periodStart": 1701619200000,
-  "periodEndsAt": 1701705600000
+  "periodStartAt": "2024-01-15T00:00:00.000Z",
+  "periodEndsAt": "2024-01-16T00:00:00.000Z"
 }
 ```
 
 - `limit`: Effective fee limit (custom if set, otherwise default)
 - `remaining`: Remaining fee budget in stroops
-- `periodStart`: Unix timestamp (ms) when current period started (if reset period configured)
-- `periodEndsAt`: Unix timestamp (ms) when period will reset (if reset period configured)
+- `periodStartAt`: Datetime string when current period started (if reset period configured)
+- `periodEndsAt`: Datetime string when period will reset (if reset period configured)
 
 ### Get Fee Limit
 
@@ -410,10 +409,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 
 ```json
 {
-  "apiKey": "client-api-key-to-query",
-  "customLimit": 500000,
-  "defaultLimit": 1000000,
-  "effectiveLimit": 500000
+  "limit": 500000
 }
 ```
 
@@ -442,7 +438,6 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 ```json
 {
   "ok": true,
-  "apiKey": "client-api-key",
   "limit": 500000
 }
 ```
@@ -470,8 +465,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 
 ```json
 {
-  "ok": true,
-  "apiKey": "client-api-key"
+  "ok": true
 }
 ```
 
@@ -613,12 +607,11 @@ console.log(result.appliedRelayerIds); // ['channel-001', 'channel-002', 'channe
 // Query fee consumption for an API key (requires adminSecret)
 const usage = await adminClient.getFeeUsage('client-api-key');
 
-console.log(usage.apiKey); // 'client-api-key'
 console.log(usage.consumed); // 500000 (stroops)
 console.log(usage.limit); // 1000000 (effective limit)
 console.log(usage.remaining); // 500000 (remaining budget)
-console.log(usage.periodStart); // Unix timestamp when period started
-console.log(usage.periodEndsAt); // Unix timestamp when period resets
+console.log(usage.periodStartAt); // '2024-01-15T00:00:00.000Z'
+console.log(usage.periodEndsAt); // '2024-01-16T00:00:00.000Z'
 ```
 
 #### Get Fee Limit (Management)
@@ -627,9 +620,7 @@ console.log(usage.periodEndsAt); // Unix timestamp when period resets
 // Query fee limit configuration for an API key (requires adminSecret)
 const limitInfo = await adminClient.getFeeLimit('client-api-key');
 
-console.log(limitInfo.customLimit); // 500000 (custom limit, if set)
-console.log(limitInfo.defaultLimit); // 1000000 (default from env)
-console.log(limitInfo.effectiveLimit); // 500000 (custom ?? default)
+console.log(limitInfo.limit); // 500000 (custom limit if set, otherwise default)
 ```
 
 #### Set Fee Limit (Management)

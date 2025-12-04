@@ -51,7 +51,7 @@ function parseFeeLimit(): number | undefined {
   const raw = process.env.FEE_LIMIT;
   if (!raw) return undefined;
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
 }
 
 function parseFeeResetPeriod(): number | undefined {

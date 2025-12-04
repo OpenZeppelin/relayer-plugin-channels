@@ -26,8 +26,8 @@ export interface UsageInfo {
   consumed: number;
   limit?: number;
   remaining?: number;
-  periodStart?: number;
-  periodEndsAt?: number;
+  periodStartAt?: string;
+  periodEndsAt?: string;
 }
 
 /** Configuration for FeeTracker */
@@ -106,8 +106,11 @@ export class FeeTracker {
       consumed: state.consumed,
       limit,
       remaining: limit !== undefined ? Math.max(0, limit - state.consumed) : undefined,
-      periodStart: state.periodStart,
-      periodEndsAt: state.periodStart && this.resetPeriodMs ? state.periodStart + this.resetPeriodMs : undefined,
+      periodStartAt: state.periodStart ? new Date(state.periodStart).toISOString() : undefined,
+      periodEndsAt:
+        state.periodStart && this.resetPeriodMs
+          ? new Date(state.periodStart + this.resetPeriodMs).toISOString()
+          : undefined,
     };
   }
 

@@ -31,7 +31,7 @@ describe('config', () => {
   test('lock ttl bounds', () => {
     delete process.env.LOCK_TTL_SECONDS;
     expect(loadConfig().lockTtlSeconds).toBe(30);
-    process.env.LOCK_TTL_SECONDS = '5';
+    process.env.LOCK_TTL_SECONDS = '2';
     expect(loadConfig().lockTtlSeconds).toBe(30);
     process.env.LOCK_TTL_SECONDS = '10';
     expect(loadConfig().lockTtlSeconds).toBe(10);

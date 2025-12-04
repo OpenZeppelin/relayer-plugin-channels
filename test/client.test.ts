@@ -422,7 +422,6 @@ describe('ChannelsClient', () => {
         data: {
           success: true,
           data: {
-            apiKey: 'client-key-123',
             consumed: 500000,
             limit: 1000000,
             remaining: 500000,
@@ -443,7 +442,6 @@ describe('ChannelsClient', () => {
       });
 
       expect(result).toEqual({
-        apiKey: 'client-key-123',
         consumed: 500000,
         limit: 1000000,
         remaining: 500000,
@@ -484,10 +482,7 @@ describe('ChannelsClient', () => {
         data: {
           success: true,
           data: {
-            apiKey: 'client-key-123',
-            customLimit: 5000000,
-            defaultLimit: 1000000,
-            effectiveLimit: 5000000,
+            limit: 5000000,
           },
         },
       });
@@ -505,10 +500,7 @@ describe('ChannelsClient', () => {
       });
 
       expect(result).toEqual({
-        apiKey: 'client-key-123',
-        customLimit: 5000000,
-        defaultLimit: 1000000,
-        effectiveLimit: 5000000,
+        limit: 5000000,
       });
     });
 
@@ -547,7 +539,6 @@ describe('ChannelsClient', () => {
           success: true,
           data: {
             ok: true,
-            apiKey: 'client-key-123',
             limit: 5000000,
           },
         },
@@ -568,7 +559,6 @@ describe('ChannelsClient', () => {
 
       expect(result).toEqual({
         ok: true,
-        apiKey: 'client-key-123',
         limit: 5000000,
       });
     });
@@ -608,7 +598,6 @@ describe('ChannelsClient', () => {
           success: true,
           data: {
             ok: true,
-            apiKey: 'client-key-123',
           },
         },
       });
@@ -627,7 +616,6 @@ describe('ChannelsClient', () => {
 
       expect(result).toEqual({
         ok: true,
-        apiKey: 'client-key-123',
       });
     });
 

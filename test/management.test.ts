@@ -65,7 +65,6 @@ describe('management', () => {
     } as any as PluginContext;
 
     const result = await handleManagement(ctx);
-    expect(result.apiKey).toBe('my-api-key');
     expect(result.consumed).toBe(5000);
   });
 
@@ -78,7 +77,6 @@ describe('management', () => {
     } as any as PluginContext;
 
     const result = await handleManagement(ctx);
-    expect(result.apiKey).toBe('unknown-key');
     expect(result.consumed).toBe(0);
   });
 
@@ -104,7 +102,6 @@ describe('management', () => {
     } as any as PluginContext;
 
     const result = await handleManagement(ctx);
-    expect(result.apiKey).toBe('my-api-key');
     expect(result.consumed).toBe(3000);
     expect(result.limit).toBe(10000);
     expect(result.remaining).toBe(7000);
@@ -126,7 +123,7 @@ describe('management', () => {
     expect(result.remaining).toBe(2000);
   });
 
-  test('getFeeLimit returns custom and default limits', async () => {
+  test('getFeeLimit returns custom limit when set', async () => {
     process.env.FEE_LIMIT = '10000';
     const kv = new FakeKV();
     await kv.set('testnet:api-key-limit:my-api-key', { limit: 5000 });
@@ -137,10 +134,7 @@ describe('management', () => {
     } as any as PluginContext;
 
     const result = await handleManagement(ctx);
-    expect(result.apiKey).toBe('my-api-key');
-    expect(result.customLimit).toBe(5000);
-    expect(result.defaultLimit).toBe(10000);
-    expect(result.effectiveLimit).toBe(5000);
+    expect(result.limit).toBe(5000);
   });
 
   test('getFeeLimit returns default when no custom limit', async () => {
@@ -153,9 +147,7 @@ describe('management', () => {
     } as any as PluginContext;
 
     const result = await handleManagement(ctx);
-    expect(result.customLimit).toBeUndefined();
-    expect(result.defaultLimit).toBe(10000);
-    expect(result.effectiveLimit).toBe(10000);
+    expect(result.limit).toBe(10000);
   });
 
   test('setFeeLimit stores custom limit', async () => {
@@ -168,7 +160,6 @@ describe('management', () => {
 
     const result = await handleManagement(ctx);
     expect(result.ok).toBe(true);
-    expect(result.apiKey).toBe('my-api-key');
     expect(result.limit).toBe(50000);
 
     const stored = await kv.get<{ limit: number }>('testnet:api-key-limit:my-api-key');
@@ -208,7 +199,6 @@ describe('management', () => {
 
     const result = await handleManagement(ctx);
     expect(result.ok).toBe(true);
-    expect(result.apiKey).toBe('my-api-key');
 
     const exists = await kv.exists('testnet:api-key-limit:my-api-key');
     expect(exists).toBe(false);

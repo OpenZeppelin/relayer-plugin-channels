@@ -20,7 +20,7 @@ export const HTTP_STATUS = {
 // Configuration Constants
 export const CONFIG = {
   DEFAULT_LOCK_TTL_SECONDS: 30,
-  MIN_LOCK_TTL_SECONDS: 10,
+  MIN_LOCK_TTL_SECONDS: 3,
   MAX_LOCK_TTL_SECONDS: 30,
 } as const;
 

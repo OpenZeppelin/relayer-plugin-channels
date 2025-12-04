@@ -99,8 +99,7 @@ async function getFeeUsage(
 
   try {
     const tracker = new FeeTracker({ kv, network, apiKey, defaultLimit, resetPeriodMs });
-    const usage = await tracker.getUsageInfo();
-    return { apiKey, ...usage };
+    return await tracker.getUsageInfo();
   } catch (e: any) {
     throw pluginError('KV error while reading fee usage', {
       code: 'KV_ERROR',
@@ -127,10 +126,7 @@ async function getFeeLimit(
     const tracker = new FeeTracker({ kv, network, apiKey, defaultLimit });
     const customLimit = await tracker.getCustomLimit();
     return {
-      apiKey,
-      customLimit,
-      defaultLimit,
-      effectiveLimit: customLimit ?? defaultLimit,
+      limit: customLimit ?? defaultLimit,
     };
   } catch (e: any) {
     throw pluginError('KV error while reading fee limit', {
@@ -161,7 +157,7 @@ async function setFeeLimit(kv: PluginKVStore, network: 'testnet' | 'mainnet', pa
   try {
     const tracker = new FeeTracker({ kv, network, apiKey });
     await tracker.setCustomLimit(Math.floor(limit));
-    return { ok: true, apiKey, limit: Math.floor(limit) };
+    return { ok: true, limit: Math.floor(limit) };
   } catch (e: any) {
     throw pluginError('KV error while setting fee limit', {
       code: 'KV_ERROR',
@@ -183,7 +179,7 @@ async function deleteFeeLimit(kv: PluginKVStore, network: 'testnet' | 'mainnet',
   try {
     const tracker = new FeeTracker({ kv, network, apiKey });
     await tracker.deleteCustomLimit();
-    return { ok: true, apiKey };
+    return { ok: true };
   } catch (e: any) {
     throw pluginError('KV error while deleting fee limit', {
       code: 'KV_ERROR',

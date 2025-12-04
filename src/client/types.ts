@@ -107,18 +107,16 @@ export interface SetChannelAccountsResponse {
  * Response from getting fee usage
  */
 export interface GetFeeUsageResponse {
-  /** The API key queried */
-  apiKey: string;
   /** Total fees consumed (in stroops) */
   consumed: number;
   /** Effective fee limit (in stroops), undefined if unlimited */
   limit?: number;
   /** Remaining fee budget (in stroops), undefined if unlimited */
   remaining?: number;
-  /** When the current reset period started (Unix timestamp ms), undefined if no reset period */
-  periodStart?: number;
-  /** When the current period will end (Unix timestamp ms), undefined if no reset period */
-  periodEndsAt?: number;
+  /** When the current reset period started, undefined if no reset period */
+  periodStartAt?: string;
+  /** When the current period will end, undefined if no reset period */
+  periodEndsAt?: string;
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];
@@ -130,14 +128,8 @@ export interface GetFeeUsageResponse {
  * Response from getting fee limit
  */
 export interface GetFeeLimitResponse {
-  /** The API key queried */
-  apiKey: string;
-  /** Custom limit for this API key (in stroops), undefined if not set */
-  customLimit?: number;
-  /** Default limit from configuration (in stroops), undefined if not set */
-  defaultLimit?: number;
-  /** Effective limit (custom ?? default), undefined if unlimited */
-  effectiveLimit?: number;
+  /** Fee limit (in stroops), undefined if unlimited */
+  limit?: number;
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];
@@ -151,8 +143,6 @@ export interface GetFeeLimitResponse {
 export interface SetFeeLimitResponse {
   /** Success indicator */
   ok: boolean;
-  /** The API key the limit was set for */
-  apiKey: string;
   /** The limit that was set (in stroops) */
   limit: number;
   /** Optional metadata (logs and traces) */
@@ -168,8 +158,6 @@ export interface SetFeeLimitResponse {
 export interface DeleteFeeLimitResponse {
   /** Success indicator */
   ok: boolean;
-  /** The API key the limit was deleted for */
-  apiKey: string;
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];
