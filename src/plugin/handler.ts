@@ -166,7 +166,14 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     // 3. Branch by request type
     if (request.type === 'xdr') {
       console.log(`[channels] Flow: XDR submit-only`);
-      return await handleXdrSubmit(request.xdr, fundRelayer as Relayer, config.network, networkPassphrase, api, tracker);
+      return await handleXdrSubmit(
+        request.xdr,
+        fundRelayer as Relayer,
+        config.network,
+        networkPassphrase,
+        api,
+        tracker
+      );
     }
 
     console.log(`[channels] Flow: func+auth with channel account`);
