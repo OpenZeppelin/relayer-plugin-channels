@@ -28,6 +28,8 @@ export interface RelayerConfig {
   adminSecret?: string;
   /** Optional request timeout in milliseconds (default: 30000) */
   timeout?: number;
+  /** Header name for API key forwarding to plugin (default: 'x-api-key') */
+  apiKeyHeader?: string;
 }
 
 /**
@@ -94,6 +96,68 @@ export interface SetChannelAccountsResponse {
   ok: boolean;
   /** Array of relayer IDs that were applied */
   appliedRelayerIds: string[];
+  /** Optional metadata (logs and traces) */
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+}
+
+/**
+ * Response from getting fee usage
+ */
+export interface GetFeeUsageResponse {
+  /** Total fees consumed (in stroops) */
+  consumed: number;
+  /** Effective fee limit (in stroops), undefined if unlimited */
+  limit?: number;
+  /** Remaining fee budget (in stroops), undefined if unlimited */
+  remaining?: number;
+  /** When the current reset period started, undefined if no reset period */
+  periodStartAt?: string;
+  /** When the current period will end, undefined if no reset period */
+  periodEndsAt?: string;
+  /** Optional metadata (logs and traces) */
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+}
+
+/**
+ * Response from getting fee limit
+ */
+export interface GetFeeLimitResponse {
+  /** Fee limit (in stroops), undefined if unlimited */
+  limit?: number;
+  /** Optional metadata (logs and traces) */
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+}
+
+/**
+ * Response from setting fee limit
+ */
+export interface SetFeeLimitResponse {
+  /** Success indicator */
+  ok: boolean;
+  /** The limit that was set (in stroops) */
+  limit: number;
+  /** Optional metadata (logs and traces) */
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+}
+
+/**
+ * Response from deleting fee limit
+ */
+export interface DeleteFeeLimitResponse {
+  /** Success indicator */
+  ok: boolean;
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];

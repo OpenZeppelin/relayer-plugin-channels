@@ -34,6 +34,12 @@
      --test-id xdr-payment \
      --contract-id CAM5NSLGILAYZ6UMPDOT5MBO2MUM65VM2PMUE7Z2TTBGNEKZZRPFML5W
 
+   # Test with fee tracking (logs fee usage after tests)
+   tsx scripts/smoke.ts \
+     --api-key YOUR_API_KEY \
+     --admin-secret ADMIN_SECRET \
+     --log-fees-spent
+
  Flags / env (args > env > defaults)
    --api-key (API_KEY)             required: API key for authentication
    --plugin-id (PLUGIN_ID)         default: 'channels' (enables relayer mode)
@@ -48,6 +54,9 @@
                                    options: xdr-payment, func-auth-no-auth, func-auth-address-auth
    --concurrency (CONCURRENCY)     optional: parallel requests per test (default: 1)
    --debug                         optional: print full plugin response with logs/traces
+   --api-key-header (API_KEY_HEADER) optional: header name for API key in relayer mode (default: x-api-key)
+   --admin-secret (ADMIN_SECRET)   optional: admin secret for management operations
+   --log-fees-spent                optional: query and log fee usage after tests (requires admin-secret)
 
  Client Modes
    Relayer mode:      Uses ChannelsClient with pluginId
@@ -154,12 +163,22 @@ async function main() {
     args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
   );
 
+  // Fee tracking flags
+  const apiKeyHeader = (args['api-key-header'] || process.env.API_KEY_HEADER || 'x-api-key') as string;
+  const adminSecret = (args['admin-secret'] || process.env.ADMIN_SECRET) as string | undefined;
+  const logFeesSpent = Boolean(args['log-fees-spent']);
+
   if (!apiKey || apiKey === 'REPLACE_ME') {
     console.warn('⚠ Set --api-key or API_KEY to your API key');
   }
 
   if (!baseUrl) {
     console.error('❌ --base-url is required when not using relayer mode (no plugin-id)');
+    process.exit(1);
+  }
+
+  if (logFeesSpent && !adminSecret) {
+    console.error('❌ --admin-secret is required when using --log-fees-spent');
     process.exit(1);
   }
 
@@ -170,8 +189,8 @@ async function main() {
 
   // Initialize the client
   const client = pluginId
-    ? new ChannelsClient({ baseUrl, apiKey, pluginId })
-    : new ChannelsClient({ baseUrl, apiKey });
+    ? new ChannelsClient({ baseUrl, apiKey, pluginId, apiKeyHeader, adminSecret })
+    : new ChannelsClient({ baseUrl, apiKey, adminSecret });
 
   type Ctx = {
     client: ChannelsClient;
@@ -288,6 +307,32 @@ async function main() {
   console.log('════════════════════════════════════════════════════════');
   console.log(`✓ All tests completed in ${elapsed}ms`);
   console.log('════════════════════════════════════════════════════════');
+
+  // Log fee usage if requested
+  if (logFeesSpent) {
+    console.log('\n📊 Fee Usage Report');
+    console.log('────────────────────────────────────────────────────────');
+    try {
+      const usage = await client.getFeeUsage(apiKey);
+      console.log(
+        `   Consumed: ${usage.consumed.toLocaleString()} stroops (${(usage.consumed / 10_000_000).toFixed(7)} XLM)`
+      );
+      if (usage.limit !== undefined) {
+        console.log(`   Limit: ${usage.limit.toLocaleString()} stroops (${(usage.limit / 10_000_000).toFixed(7)} XLM)`);
+        console.log(
+          `   Remaining: ${usage.remaining?.toLocaleString() ?? 0} stroops (${((usage.remaining ?? 0) / 10_000_000).toFixed(7)} XLM)`
+        );
+      } else {
+        console.log(`   Limit: unlimited`);
+      }
+      if (usage.periodStartAt) {
+        console.log(`   Period: ${usage.periodStartAt} → ${usage.periodEndsAt ?? 'N/A'}`);
+      }
+    } catch (err: any) {
+      console.error(`   ❌ Failed to fetch fee usage: ${err?.message || err}`);
+    }
+    console.log('════════════════════════════════════════════════════════');
+  }
 }
 
 declare const fetch: any;

@@ -15,5 +15,9 @@ export {
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
+  GetFeeUsageResponse,
+  GetFeeLimitResponse,
+  SetFeeLimitResponse,
+  DeleteFeeLimitResponse,
 } from './types';
 export { PluginClientError, PluginTransportError, PluginExecutionError, PluginUnexpectedError } from './errors';
