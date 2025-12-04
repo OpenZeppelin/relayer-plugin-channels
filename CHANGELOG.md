@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.5.0
+
+### Minor Changes
+
+- 63ff7a7: feat: Add fee tracking and management API
+
 ## 0.4.0
 
 ### Minor Changes
