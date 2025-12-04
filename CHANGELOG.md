@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.4.0
+
+### Minor Changes
+
+- ef37a6c: feat: Use relayer for all rpc calls
+
 ## 0.3.1
 
 ### Patch Changes
