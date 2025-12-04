@@ -9,7 +9,6 @@
 
 import { PluginKVStore, pluginError } from '@openzeppelin/relayer-sdk';
 import crypto from 'crypto';
-import { getLockTtlSeconds } from './config';
 import { HTTP_STATUS, POOL } from './constants';
 
 export type PoolLock = { relayerId: string; token: string };
@@ -23,11 +22,11 @@ export class ChannelPool {
   private readonly mutexTtlSec: number;
   private readonly kv: PluginKVStore;
 
-  constructor(network: 'testnet' | 'mainnet', kv: PluginKVStore) {
+  constructor(network: 'testnet' | 'mainnet', kv: PluginKVStore, lockTtlSeconds: number) {
     this.network = network;
     this.kv = kv;
     this.globalLockKey = `${this.network}:channel-pool-lock`;
-    this.channelLockTtlSec = getLockTtlSeconds();
+    this.channelLockTtlSec = lockTtlSeconds;
     this.mutexTtlSec = POOL.MUTEX_TTL_SECONDS;
   }
 

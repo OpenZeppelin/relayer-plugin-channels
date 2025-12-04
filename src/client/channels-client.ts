@@ -9,6 +9,10 @@ import type {
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
+  GetFeeUsageResponse,
+  GetFeeLimitResponse,
+  SetFeeLimitResponse,
+  DeleteFeeLimitResponse,
   PluginResponse,
 } from './types';
 
@@ -44,10 +48,14 @@ export class ChannelsClient {
     // Route through Relayer plugin system if pluginId provided, otherwise connect directly
     if ('pluginId' in config && config.pluginId) {
       this.pluginId = config.pluginId;
+      const apiKeyHeader = config.apiKeyHeader || 'x-api-key';
 
       const relayerConfig = new Configuration({
         basePath: config.baseUrl,
         accessToken: config.apiKey,
+        baseOptions: {
+          headers: { [apiKeyHeader]: config.apiKey },
+        },
       });
 
       this.pluginsApi = new PluginsApi(relayerConfig);
@@ -61,7 +69,7 @@ export class ChannelsClient {
         timeout: config.timeout || 30000,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`,
+          Authorization: `Bearer ${config.apiKey}`,
         },
       });
     }
@@ -154,6 +162,92 @@ export class ChannelsClient {
   }
 
   /**
+   * Get fee usage for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to query fee usage for
+   * @returns Fee usage data including total consumed
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
+   *
+   * @example
+   * const usage = await client.getFeeUsage('client-api-key-123');
+   * console.log(`Consumed: ${usage.consumed} stroops`);
+   */
+  async getFeeUsage(apiKey: string): Promise<GetFeeUsageResponse> {
+    return this.call<GetFeeUsageResponse>({
+      management: {
+        action: 'getFeeUsage',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+      },
+    });
+  }
+
+  /**
+   * Get fee limit configuration for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to query fee limit for
+   * @returns Fee limit data
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
+   */
+  async getFeeLimit(apiKey: string): Promise<GetFeeLimitResponse> {
+    return this.call<GetFeeLimitResponse>({
+      management: {
+        action: 'getFeeLimit',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+      },
+    });
+  }
+
+  /**
+   * Set a custom fee limit for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to set the limit for
+   * @param limit The fee limit in stroops (0 blocks all transactions)
+   * @returns Confirmation with the applied limit
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
+   */
+  async setFeeLimit(apiKey: string, limit: number): Promise<SetFeeLimitResponse> {
+    return this.call<SetFeeLimitResponse>({
+      management: {
+        action: 'setFeeLimit',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+        limit,
+      },
+    });
+  }
+
+  /**
+   * Delete a custom fee limit for a specific API key (requires adminSecret)
+   *
+   * @param apiKey The client API key to remove the custom limit for
+   * @returns Confirmation of deletion
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
+   */
+  async deleteFeeLimit(apiKey: string): Promise<DeleteFeeLimitResponse> {
+    return this.call<DeleteFeeLimitResponse>({
+      management: {
+        action: 'deleteFeeLimit',
+        adminSecret: this.requireAdminSecret(),
+        apiKey,
+      },
+    });
+  }
+
+  /**
    * Ensures adminSecret is configured
    *
    * @returns The admin secret value
@@ -187,7 +281,7 @@ export class ChannelsClient {
     // Unknown error type
     throw new PluginUnexpectedError(
       `Unexpected error: ${error instanceof Error ? error.message : String(error)}`,
-      error,
+      error
     );
   }
 
@@ -221,7 +315,7 @@ export class ChannelsClient {
    */
   private mergeMetadata<T>(
     data: T,
-    metadata?: { logs?: LogEntry[]; traces?: any[] }, // eslint-disable-line @typescript-eslint/no-explicit-any
+    metadata?: { logs?: LogEntry[]; traces?: any[] } // eslint-disable-line @typescript-eslint/no-explicit-any
   ): T {
     if (!metadata || (!metadata.logs && !metadata.traces)) {
       return data;
@@ -254,9 +348,7 @@ export class ChannelsClient {
 
     // Handle execution errors
     if (!response.success) {
-      const errorDetails = response.metadata
-        ? { ...response.data, metadata: response.metadata }
-        : response.data;
+      const errorDetails = response.metadata ? { ...response.data, metadata: response.metadata } : response.data;
       throw new PluginExecutionError(response.error || 'Plugin execution failed', errorDetails);
     }
 
