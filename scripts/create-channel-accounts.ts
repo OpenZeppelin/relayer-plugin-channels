@@ -665,14 +665,19 @@ async function ensureRelayer(
   signerId: string
 ): Promise<{ id: string; address?: string }> {
   try {
-    const response = await relayersApi.createRelayer({
+    const relayerRequest: any = {
       id: relayerId,
       name: relayerName,
       network,
       network_type: RelayerNetworkType.STELLAR,
       signer_id: signerId,
       paused: false,
-    });
+      policies: {
+        fee_payment_strategy: 'relayer',
+      },
+    };
+
+    const response = await relayersApi.createRelayer(relayerRequest);
     const data = response.data?.data;
     if (!data) {
       throw new Error('createRelayer returned an empty response');
@@ -850,9 +855,6 @@ async function main(): Promise<void> {
 
     const existingSigner = await fetchSignerRecord(signersApi, signerId);
     const existingRelayer = await fetchRelayerRecord(relayersApi, relayerId);
-
-    // const signerExistedBefore = Boolean(existingSigner);
-    // const relayerExistedBefore = Boolean(existingRelayer);
 
     let signerRecord = existingSigner;
     let relayerRecord = existingRelayer;
