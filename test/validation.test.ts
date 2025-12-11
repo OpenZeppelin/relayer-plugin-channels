@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { xdr, Contract } from '@stellar/stellar-sdk';
-import { validateAndParseRequest } from '../validation';
+import { validateAndParseRequest } from '../src/plugin/validation';
 
 describe('validation', () => {
   test('accepts xdr-only request', () => {

@@ -2,6 +2,48 @@
 
 A plugin for OpenZeppelin Relayer that enables parallel transaction submission on Stellar using channel accounts with fee bumping. Channel accounts provide unique sequence numbers for parallel transaction submission, preventing sequence number conflicts.
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Installation & Setup](#installation--setup)
+  - [Install from npm](#1-install-from-npm-recommended)
+  - [Use a local build](#2-use-a-local-build-for-development--debugging)
+  - [Create the plugin wrapper](#create-the-plugin-wrapper)
+  - [Configure the Relayer](#configure-the-relayer)
+  - [Configure Environment Variables](#configure-environment-variables)
+  - [Initialize Channel Accounts](#initialize-channel-accounts)
+- [Development](#development)
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Management API](#management-api)
+  - [List Channel Accounts](#list-channel-accounts)
+  - [Set Channel Accounts](#set-channel-accounts)
+  - [Get Fee Usage](#get-fee-usage)
+  - [Get Fee Limit](#get-fee-limit)
+  - [Set Fee Limit](#set-fee-limit)
+  - [Delete Fee Limit](#delete-fee-limit)
+- [Plugin Client](#plugin-client)
+  - [Installation](#installation)
+  - [Quick Start](#quick-start-1)
+  - [Client Modes](#client-modes)
+  - [Usage Examples](#usage-examples)
+  - [Error Handling](#error-handling)
+  - [Metadata and Debugging](#metadata-and-debugging)
+  - [TypeScript Types](#typescript-types)
+  - [Configuration Options](#configuration-options)
+- [API Usage](#api-usage)
+  - [Submit with Transaction XDR](#submit-with-transaction-xdr)
+  - [Submit with Function and Auth](#submit-with-function-and-auth)
+  - [Parameters](#parameters)
+  - [Response](#response)
+- [How It Works](#how-it-works)
+- [Validation Rules](#validation-rules)
+- [KV Schema](#kv-schema)
+- [Error Codes](#error-codes)
+- [Smoke Test Contract](#smoke-test-contract)
+- [License](#license)
+
 ## Quick Start
 
 **Want to get started quickly?** Check out the [Channels Plugin Example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/channels-plugin-example) which includes a pre-configured relayer setup, Docker Compose configuration, and step-by-step instructions. This is the fastest way to get the Channels plugin up and running.
@@ -172,13 +214,16 @@ Set the required environment variables for the plugin:
 ```bash
 # Required environment variables
 export STELLAR_NETWORK="testnet"        # or "mainnet"
-export SOROBAN_RPC_URL="https://soroban-testnet.stellar.org"
 export FUND_RELAYER_ID="channels-fund"
 export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 
 # Optional environment variables
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
-export MAX_FEE=1000000                  # default: 1,000,000 stroops
+
+# Fee tracking (optional)
+export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set)
+export FEE_RESET_PERIOD_SECONDS=86400     # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
+export API_KEY_HEADER="x-api-key"         # Header name to extract API key (default: x-api-key)
 ```
 
 Your Relayer should now contain:
@@ -304,12 +349,376 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 }
 ```
 
+### Get Fee Usage
+
+Query fee consumption for a specific API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeUsage",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "consumed": 500000,
+  "limit": 1000000,
+  "remaining": 500000,
+  "periodStartAt": "2024-01-15T00:00:00.000Z",
+  "periodEndsAt": "2024-01-16T00:00:00.000Z"
+}
+```
+
+- `limit`: Effective fee limit (custom if set, otherwise default)
+- `remaining`: Remaining fee budget in stroops
+- `periodStartAt`: Datetime string when current period started (if reset period configured)
+- `periodEndsAt`: Datetime string when period will reset (if reset period configured)
+
+### Get Fee Limit
+
+Query fee limit configuration for a specific API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "getFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key-to-query"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "limit": 500000
+}
+```
+
+### Set Fee Limit
+
+Set a custom fee limit for a specific API key:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key",
+        "limit": 500000
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "limit": 500000
+}
+```
+
+Note: If custom limit is set to 0 it will block all transactions
+
+### Delete Fee Limit
+
+Remove a custom fee limit for a specific API key (reverts to default limit):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "deleteFeeLimit",
+        "adminSecret": "your-secret-here",
+        "apiKey": "client-api-key"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "ok": true
+}
+```
+
 **Important Notes:**
 
 - You must configure at least one channel account before the plugin can process transactions
 - The management API will prevent removing accounts that are currently locked (in use). On failure it throws a plugin error with status 409, code `LOCKED_CONFLICT`, and `details.locked` listing blocked IDs.
 - All relayer IDs must exist in your OpenZeppelin Relayer configuration
 - The `adminSecret` must match the `PLUGIN_ADMIN_SECRET` environment variable
+
+## Plugin Client
+
+The Channels plugin provides a TypeScript client for easy integration into your applications. The client automatically handles request/response formatting, error handling, and supports both relayer mode and direct HTTP mode.
+
+### Installation
+
+```bash
+npm install @openzeppelin/relayer-plugin-channels
+# or
+pnpm add @openzeppelin/relayer-plugin-channels
+```
+
+### Quick Start
+
+```typescript
+import { ChannelsClient } from '@openzeppelin/relayer-plugin-channels';
+
+// Connecting to OpenZeppelin's managed Channels service
+const client = new ChannelsClient({
+  baseUrl: 'https://channels.openzeppelin.com',
+  apiKey: 'your-api-key',
+});
+
+// Connecting to your own Relayer with Channels plugin
+const relayerClient = new ChannelsClient({
+  baseUrl: 'http://localhost:8080',
+  pluginId: 'channels',
+  apiKey: 'your-relayer-api-key',
+  adminSecret: 'your-admin-secret', // Optional: Required for management operations
+});
+```
+
+### Configuration
+
+**Managed Service**
+
+When connecting to OpenZeppelin's managed Channels service (which runs behind Cloudflare and a load balancer), provide just the `baseUrl` and `apiKey`:
+
+```typescript
+// Mainnet
+const client = new ChannelsClient({
+  baseUrl: 'https://channels.openzeppelin.com',
+  apiKey: 'your-api-key',
+});
+
+// Testnet
+const testnetClient = new ChannelsClient({
+  baseUrl: 'https://channels.openzeppelin.com/testnet',
+  apiKey: 'your-api-key',
+});
+```
+
+**Generate API Keys:**
+
+- Testnet: https://channels.openzeppelin.com/testnet/gen
+- Mainnet: https://channels.openzeppelin.com/gen
+
+**Self-Hosted Relayer**
+
+When connecting directly to your own OpenZeppelin Relayer instance, include the `pluginId`:
+
+```typescript
+const client = new ChannelsClient({
+  baseUrl: 'http://localhost:8080',
+  pluginId: 'channels',
+  apiKey: 'your-relayer-api-key',
+  adminSecret: 'your-admin-secret', // Optional: Required for management operations
+});
+```
+
+The client automatically routes requests appropriately based on whether `pluginId` is provided
+
+### Usage Examples
+
+#### Submit Signed XDR Transaction
+
+```typescript
+// Submit a complete, signed transaction
+const result = await client.submitTransaction({
+  xdr: 'AAAAAgAAAAC...', // Complete transaction envelope XDR
+});
+
+console.log(result.hash); // Transaction hash
+console.log(result.status); // Transaction status
+console.log(result.transactionId); // Relayer transaction ID
+```
+
+#### Submit Soroban Function with Auth
+
+```typescript
+// Submit func+auth (uses channel accounts and simulation)
+const result = await client.submitSorobanTransaction({
+  func: 'AAAABAAAAAEAAAAGc3ltYm9s...', // Host function XDR (base64)
+  auth: ['AAAACAAAAAEAAAA...'], // Auth entry XDRs (base64)
+});
+
+console.log(result.hash);
+```
+
+#### List Channel Accounts (Management)
+
+```typescript
+// Initialize client with admin secret
+const adminClient = new ChannelsClient({
+  baseUrl: 'http://localhost:8080',
+  apiKey: 'your-api-key',
+  pluginId: 'channels',
+  adminSecret: 'your-admin-secret', // Required for management operations
+});
+
+// List configured channel accounts
+const accounts = await adminClient.listChannelAccounts();
+console.log(accounts.relayerIds); // ['channel-001', 'channel-002', ...]
+```
+
+#### Set Channel Accounts (Management)
+
+```typescript
+// Configure channel accounts (requires adminSecret)
+const result = await adminClient.setChannelAccounts(['channel-001', 'channel-002', 'channel-003']);
+
+console.log(result.ok); // true
+console.log(result.appliedRelayerIds); // ['channel-001', 'channel-002', 'channel-003']
+```
+
+#### Get Fee Usage (Management)
+
+```typescript
+// Query fee consumption for an API key (requires adminSecret)
+const usage = await adminClient.getFeeUsage('client-api-key');
+
+console.log(usage.consumed); // 500000 (stroops)
+console.log(usage.limit); // 1000000 (effective limit)
+console.log(usage.remaining); // 500000 (remaining budget)
+console.log(usage.periodStartAt); // '2024-01-15T00:00:00.000Z'
+console.log(usage.periodEndsAt); // '2024-01-16T00:00:00.000Z'
+```
+
+#### Get Fee Limit (Management)
+
+```typescript
+// Query fee limit configuration for an API key (requires adminSecret)
+const limitInfo = await adminClient.getFeeLimit('client-api-key');
+
+console.log(limitInfo.limit); // 500000 (custom limit if set, otherwise default)
+```
+
+#### Set Fee Limit (Management)
+
+```typescript
+// Set a custom fee limit for an API key (requires adminSecret)
+const result = await adminClient.setFeeLimit('client-api-key', 500000);
+
+console.log(result.ok); // true
+console.log(result.limit); // 500000
+```
+
+#### Delete Fee Limit (Management)
+
+```typescript
+// Remove custom fee limit, revert to default (requires adminSecret)
+const result = await adminClient.deleteFeeLimit('client-api-key');
+
+console.log(result.ok); // true
+```
+
+### Error Handling
+
+The client provides three types of errors:
+
+```typescript
+import {
+  PluginTransportError,
+  PluginExecutionError,
+  PluginUnexpectedError,
+} from '@openzeppelin/relayer-plugin-channels';
+
+try {
+  const result = await client.submitTransaction({ xdr: '...' });
+} catch (error) {
+  if (error instanceof PluginTransportError) {
+    // Network/HTTP failures (connection refused, timeout, 500/502/503)
+    console.error('Transport error:', error.message);
+    console.error('Status code:', error.statusCode);
+  } else if (error instanceof PluginExecutionError) {
+    // Plugin rejected the request (validation, business logic, on-chain failure)
+    console.error('Execution error:', error.message);
+    console.error('Details:', error.errorDetails);
+  } else if (error instanceof PluginUnexpectedError) {
+    // Client-side parsing/validation errors
+    console.error('Unexpected error:', error.message);
+  }
+}
+```
+
+### Metadata and Debugging
+
+Responses include optional metadata (logs and traces) when the plugin is configured with `emit_logs` and `emit_traces`:
+
+```typescript
+const result = await client.submitTransaction({ xdr: '...' });
+
+// Access metadata if available
+if (result.metadata) {
+  console.log('Logs:', result.metadata.logs);
+  console.log('Traces:', result.metadata.traces);
+}
+```
+
+### TypeScript Types
+
+All request and response types are fully typed:
+
+```typescript
+import type {
+  ChannelsXdrRequest,
+  ChannelsFuncAuthRequest,
+  ChannelsTransactionResponse,
+  ListChannelAccountsResponse,
+  SetChannelAccountsResponse,
+  GetFeeUsageResponse,
+  GetFeeLimitResponse,
+  SetFeeLimitResponse,
+  DeleteFeeLimitResponse,
+} from '@openzeppelin/relayer-plugin-channels';
+```
+
+### Configuration Options
+
+```typescript
+interface ChannelsClientConfig {
+  // Required
+  baseUrl: string; // Service URL
+  apiKey: string; // API key for authentication
+
+  // Optional
+  pluginId?: string; // Include when connecting to a Relayer directly
+  adminSecret?: string; // Required for management operations
+  timeout?: number; // Request timeout in ms (default: 30000)
+  apiKeyHeader?: string; // Header name for API key (default: 'x-api-key')
+}
+```
 
 ## API Usage
 
@@ -421,6 +830,16 @@ Plugin error example:
 - **Value**: `{ token: string, lockedAt: ISOString }`
 - **TTL**: Configured by `LOCK_TTL_SECONDS`.
 
+### Fee Tracking
+
+- **Key**: `<network>:api-key-fees:<apiKey>`
+- **Value**: `{ consumed: number, periodStart?: number }` (fees in stroops, period start timestamp in ms)
+
+### Custom Fee Limits
+
+- **Key**: `<network>:api-key-limit:<apiKey>`
+- **Value**: `{ limit: number }` (custom fee limit in stroops)
+
 ## Error Codes
 
 - `CONFIG_MISSING`: Missing required environment variable
@@ -438,67 +857,9 @@ Plugin error example:
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
+- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured (HTTP 403)
+- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
 
 ## License
 
 MIT
-
----
-
-## Smoke Test Contract
-
-This repo includes a minimal Soroban contract and smoke test script that exercise the Channels plugin with different authorization methods.
-
-### Contract
-
-- **Path**: `contracts/smoke-contract`
-- **Functions**:
-  - `no_auth_bump(n: u32) -> u32` — No auth required; returns n+1
-  - `write_with_address_auth(addr: Address, value: u32)` — Requires address auth; writes value to storage
-  - `read_value(addr: Address) -> u32` — Reads stored value for address
-
-Build/optimize/deploy with the Stellar CLI:
-
-```bash
-# Using helper script
-bash contracts/smoke-contract/contract.sh build
-bash contracts/smoke-contract/contract.sh optimize
-bash contracts/smoke-contract/contract.sh deploy --network testnet --account test-account
-```
-
-### Smoke Test Script
-
-- **Path**: `scripts/smoke.ts`
-- **Requirements**:
-  - Node.js 18+
-  - Stellar CLI (`stellar`) configured with a key
-  - Channels plugin running at base URL
-
-Environment variables:
-
-```bash
-export BASE_URL="http://localhost:8080"      # relayer origin
-export API_KEY="<relayer-api-key>"           # required
-export NETWORK="testnet"                     # or "mainnet"
-export RPC_URL="https://soroban-testnet.stellar.org"
-export ACCOUNT_NAME="test-account"           # key in `stellar keys`
-export CONTRACT_ID="CDXX..."                 # deployed smoke-contract
-```
-
-Run (args override env):
-
-```bash
-pnpm ts-node scripts/smoke.ts \
-  --api-key YOUR_API_KEY \
-  --account-name test-account \
-  --contract-id CDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-
-# Show all options in the script header
-```
-
-What it does:
-
-- Health-checks the relayer
-- XDR submit-only: signs a small self-payment and submits via fee bump
-- func+auth (no auth): calls `no_auth_bump(42)` using a channel account
-- func+auth (address auth): calls `write_with_address_auth(addr, 777)` with signed auth entries

@@ -1,11 +1,11 @@
 import { describe, test, expect } from 'vitest';
-import { ChannelPool } from '../pool';
+import { ChannelPool } from '../src/plugin/pool';
 import { FakeKV } from './helpers/fakeKV';
 
 describe('ChannelPool busy mutex', () => {
   test('acquire retries when global mutex is busy, then succeeds', async () => {
     const kv = new FakeKV();
-    const pool = new ChannelPool('testnet', kv as any);
+    const pool = new ChannelPool('testnet', kv as any, 30);
 
     // Configure a single relayer
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
@@ -23,4 +23,3 @@ describe('ChannelPool busy mutex', () => {
     await pool.release(lock);
   });
 });
-

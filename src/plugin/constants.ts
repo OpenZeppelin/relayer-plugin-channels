@@ -10,6 +10,7 @@ export const HTTP_STATUS = {
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   CONFLICT: 409,
+  TOO_MANY_REQUESTS: 429,
   INTERNAL_SERVER_ERROR: 500,
   BAD_GATEWAY: 502,
   SERVICE_UNAVAILABLE: 503,
@@ -19,9 +20,8 @@ export const HTTP_STATUS = {
 // Configuration Constants
 export const CONFIG = {
   DEFAULT_LOCK_TTL_SECONDS: 30,
-  MIN_LOCK_TTL_SECONDS: 10,
+  MIN_LOCK_TTL_SECONDS: 3,
   MAX_LOCK_TTL_SECONDS: 30,
-  DEFAULT_MAX_FEE: 1_000_000,
 } as const;
 
 // Pool Constants
@@ -56,5 +56,6 @@ export const POLLING = {
 export const FEE = {
   MIN_BASE_FEE: 205,
   MAX_BASE_FEE: 605,
-  RESOURCE_FEE_OFFSET: 60_000,
+  // For non-Soroban txs: 100,000 stroops (0.01 XLM) per Stellar best practice
+  NON_SOROBAN_FEE: 100_000,
 } as const;

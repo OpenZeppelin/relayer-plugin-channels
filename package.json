@@ -1,6 +1,6 @@
 {
   "name": "@openzeppelin/relayer-plugin-channels",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "OpenZeppelin Relayer Plugin for Stellar Channel Accounts",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,7 +24,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "install-deps": "pnpm install --frozen-lockfile --ignore-scripts --prefer-offline",
+    "install-pnpm": "npm install -g pnpm",
+    "ci:version": "pnpm changeset version",
+    "release": "node ./scripts/release.js"
   },
   "repository": {
     "type": "git",
@@ -33,20 +37,23 @@
   "author": "OpenZeppelin <contact@openzeppelin.com>",
   "license": "MIT",
   "dependencies": {
-    "@openzeppelin/relayer-sdk": "^1.6.0",
-    "@stellar/stellar-sdk": "^11.2.0"
+    "@actions/exec": "^1.1.1",
+    "@openzeppelin/relayer-sdk": "^1.8.0",
+    "@stellar/stellar-sdk": "^14.4.0",
+    "axios": "^1.13.2"
   },
   "devDependencies": {
-    "@types/node": "^22.13.14",
-    "@typescript-eslint/eslint-plugin": "^8.38.0",
-    "@typescript-eslint/parser": "^8.38.0",
-    "eslint": "^9.22.0",
-    "eslint-config-prettier": "^9.0.0",
-    "eslint-plugin-prettier": "^5.0.0",
-    "prettier": "^3.0.0",
+    "@changesets/cli": "^2.29.8",
+    "@types/node": "^22.19.1",
+    "@typescript-eslint/eslint-plugin": "^8.48.1",
+    "@typescript-eslint/parser": "^8.48.1",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-prettier": "^5.5.4",
+    "prettier": "^3.7.4",
     "typescript": "5.8.3",
-    "vitest": "^4.0.4",
-    "ts-node": "^10.9.2"
+    "typescript-eslint": "8.27.0",
+    "vitest": "^4.0.15"
   },
   "engines": {
     "node": ">=22.18.0",
