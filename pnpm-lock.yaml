@@ -16,7 +16,7 @@ importers:
         version: 1.8.0
       '@stellar/stellar-sdk':
         specifier: ^14.4.0
-        version: 14.4.0
+        version: 14.4.3
       axios:
         specifier: ^1.13.2
         version: 1.13.2
@@ -494,12 +494,12 @@ packages:
   '@stellar/js-xdr@3.1.2':
     resolution: {integrity: sha512-VVolPL5goVEIsvuGqDc5uiKxV03lzfWdvYg1KikvwheDmTBO68CKDji3bAZ/kppZrx5iTA8z3Ld5yuytcvhvOQ==}
 
-  '@stellar/stellar-base@14.0.3':
-    resolution: {integrity: sha512-mBxNArxWq4wKNJATPJpXB2vIRQ3vUzIvjMCloSsGbfKRrSy96ie8yy7DWh9vSOHV6tNwe85hd3v+p/shlyosqA==}
+  '@stellar/stellar-base@14.0.4':
+    resolution: {integrity: sha512-UbNW6zbdOBXJwLAV2mMak0bIC9nw3IZVlQXkv2w2dk1jgCbJjy3oRVC943zeGE5JAm0Z9PHxrIjmkpGhayY7kw==}
     engines: {node: '>=20.0.0'}
 
-  '@stellar/stellar-sdk@14.4.0':
-    resolution: {integrity: sha512-YsWbcjdEMi8HsA9l5Sr+V3ajSrrM/ZXNyIGGGmpGH+IUfo6uskczGuOmN/fQ0xhuajuMrbitnuaXmsVb7pjKjg==}
+  '@stellar/stellar-sdk@14.4.3':
+    resolution: {integrity: sha512-QfaScSNd4Ku0GGfaZjR8679+M5gLHG+09OLLqV3Bv1VaDKXjHmhf8ikalz2jlx3oFnmlEpEgnqXIdf4kdD2x/w==}
     engines: {node: '>=20.0.0'}
 
   '@types/chai@5.2.3':
@@ -2013,7 +2013,7 @@ snapshots:
 
   '@stellar/js-xdr@3.1.2': {}
 
-  '@stellar/stellar-base@14.0.3':
+  '@stellar/stellar-base@14.0.4':
     dependencies:
       '@noble/curves': 1.9.7
       '@stellar/js-xdr': 3.1.2
@@ -2022,9 +2022,9 @@ snapshots:
       buffer: 6.0.3
       sha.js: 2.4.12
 
-  '@stellar/stellar-sdk@14.4.0':
+  '@stellar/stellar-sdk@14.4.3':
     dependencies:
-      '@stellar/stellar-base': 14.0.3
+      '@stellar/stellar-base': 14.0.4
       axios: 1.13.2
       bignumber.js: 9.3.1
       eventsource: 2.0.2
