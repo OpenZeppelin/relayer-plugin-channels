@@ -79,6 +79,7 @@ export async function simulateAndBuildWithChannel(
   } as rpc.Api.RawSimulateTransactionResponse;
 
   if ('error' in simResult && simResult.error) {
+    console.error(`[channels] Simulation error: ${simResult.error}`);
     throw pluginError('Simulation failed', {
       code: 'SIMULATION_FAILED',
       status: HTTP_STATUS.BAD_REQUEST,
@@ -94,6 +95,7 @@ export async function simulateAndBuildWithChannel(
     console.debug(`[channels] Simulation complete: resourceFee=${resourceFee}`);
     return prepared;
   } catch (err: any) {
+    console.error(`[channels] Assembly error: ${err instanceof Error ? err.message : String(err)}`);
     throw pluginError('Simulation failed', {
       code: 'SIMULATION_FAILED',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
@@ -109,12 +111,12 @@ export function parseSimulationError(error: string): string {
   const firstLine = error.split('\n')[0]?.trim() || 'Simulation failed';
   const errorType = firstLine.match(/Error\(([^)]+)\)/)?.[1];
 
-  const arrayMatch = error.match(/data:\s*\["([^"]+)"/);
+  const arrayMatch = error.match(/data:\s*\["((?:[^"\\]|\\.)*)"/);
   if (arrayMatch?.[1] && arrayMatch[1].length > 3) {
     return errorType ? `${arrayMatch[1]} (${errorType})` : arrayMatch[1];
   }
 
-  const stringMatch = error.match(/data:\s*"([^"]+)"/);
+  const stringMatch = error.match(/data:\s*"((?:[^"\\]|\\.)*)"/);
   if (stringMatch?.[1] && stringMatch[1].length > 3) {
     return errorType ? `${stringMatch[1]} (${errorType})` : stringMatch[1];
   }
