@@ -6,6 +6,7 @@
  - XDR submit-only: signs a small self-payment and submits via fee bump
  - func+auth (no auth): calls smoke-contract `no_auth_bump(42)` using a channel account
  - func+auth (address auth): calls `write_with_address_auth(addr, 777)` and signs auth entries
+ - mgmt-api: tests management API (getFeeUsage, getFeeLimit, setFeeLimit, deleteFeeLimit)
 
  Prerequisites
  - Node.js 18+ (global fetch available)
@@ -51,7 +52,7 @@
    --network (NETWORK)             default: testnet | also supports: mainnet
    --rpc-url (RPC_URL)             default: https://soroban-testnet.stellar.org
    --test-id (TEST_ID)             optional: run only one test
-                                   options: xdr-payment, func-auth-no-auth, func-auth-address-auth
+                                   options: xdr-payment, func-auth-no-auth, func-auth-address-auth, mgmt-api
    --concurrency (CONCURRENCY)     optional: parallel requests per test (default: 1)
    --debug                         optional: print full plugin response with logs/traces
    --api-key-header (API_KEY_HEADER) optional: header name for API key in relayer mode (default: x-api-key)
@@ -154,14 +155,21 @@ async function main() {
   const baseUrl = String(args['base-url'] || process.env.BASE_URL || (pluginId ? 'http://localhost:8080' : ''));
   const network = String(args.network || process.env.NETWORK || 'testnet').toLowerCase() as 'testnet' | 'mainnet';
   const passphrase = np(network);
-  const rpcUrl = String(args['rpc-url'] || process.env.RPC_URL || 'https://soroban-testnet.stellar.org');
+  const defaultRpcUrl =
+    network === 'mainnet'
+      ? 'https://soroban-rpc.mainnet.stellar.gateway.fm'
+      : 'https://soroban-testnet.stellar.org';
+  const rpcUrl = String(args['rpc-url'] || process.env.RPC_URL || defaultRpcUrl);
   const accountName = String(args['account-name'] || process.env.ACCOUNT_NAME || 'test-account');
   const testId = (args['test-id'] || process.env.TEST_ID) as string | undefined;
   const debug = Boolean(args['debug'] || process.env.DEBUG);
   const concurrency = parseInt(String(args['concurrency'] || process.env.CONCURRENCY || '1'), 10);
-  const contractId = String(
-    args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
-  );
+  // Default contract IDs per network
+  const defaultContractId =
+    network === 'mainnet'
+      ? 'CCP6S7LOAIWYZKFZQHVT44GAB7LDCXZEEZRAXVKCN4NWAWB4LEOXHWG4' // mainnet smoke contract
+      : 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'; // testnet smoke contract
+  const contractId = String(args['contract-id'] || process.env.CONTRACT_ID || defaultContractId);
 
   // Fee tracking flags
   const apiKeyHeader = (args['api-key-header'] || process.env.API_KEY_HEADER || 'x-api-key') as string;
@@ -200,8 +208,10 @@ async function main() {
     address: string;
     contractId: string;
     debug: boolean;
+    apiKey: string;
+    adminSecret?: string;
   };
-  const ctx: Ctx = { client, rpc: rpcServer, passphrase, keypair, address, contractId, debug };
+  const ctx: Ctx = { client, rpc: rpcServer, passphrase, keypair, address, contractId, debug, apiKey, adminSecret };
 
   const TESTS: { id: string; label: string; run: (ctx: Ctx) => Promise<void> }[] = [
     {
@@ -244,6 +254,59 @@ async function main() {
           auth: [signedEntry.toXDR('base64')],
         });
         printResult('func-auth-address-auth', { success: true, data: res }, debug);
+      },
+    },
+    {
+      id: 'mgmt-api',
+      label: 'Management API: fee limits CRUD',
+      run: async ({ client, apiKey, adminSecret, debug }) => {
+        if (!adminSecret) {
+          console.log('   ⏭ Skipped (requires --admin-secret)');
+          return;
+        }
+
+        const formatStroops = (s: number) => `${s.toLocaleString()} stroops (${(s / 10_000_000).toFixed(7)} XLM)`;
+
+        // 1. Get current fee usage
+        const usage = await client.getFeeUsage(apiKey);
+        printResult('getFeeUsage', { success: true, data: usage }, debug);
+        if (!debug) console.log(`      consumed: ${formatStroops(usage.consumed)}`);
+
+        // 2. Get current fee limit
+        const limitBefore = await client.getFeeLimit(apiKey);
+        printResult('getFeeLimit', { success: true, data: limitBefore }, debug);
+        if (!debug) console.log(`      limit: ${limitBefore.limit ? formatStroops(limitBefore.limit) : 'unlimited'}`);
+
+        // 3. Set a custom fee limit (5 XLM)
+        const testLimit = 50_000_000;
+        const setResult = await client.setFeeLimit(apiKey, testLimit);
+        if (!setResult.ok || setResult.limit !== testLimit) {
+          throw new Error(`setFeeLimit failed: expected ${testLimit}, got ${setResult.limit}`);
+        }
+        printResult('setFeeLimit', { success: true, data: setResult }, debug);
+        if (!debug) console.log(`      limit: ${formatStroops(setResult.limit)}`);
+
+        // 4. Verify limit was set
+        const limitAfterSet = await client.getFeeLimit(apiKey);
+        if (limitAfterSet.limit !== testLimit) {
+          throw new Error(`getFeeLimit after set: expected ${testLimit}, got ${limitAfterSet.limit}`);
+        }
+        printResult('getFeeLimit (verify set)', { success: true, data: limitAfterSet }, debug);
+
+        // 5. Delete the custom limit
+        const deleteResult = await client.deleteFeeLimit(apiKey);
+        if (!deleteResult.ok) {
+          throw new Error('deleteFeeLimit failed');
+        }
+        printResult('deleteFeeLimit', { success: true, data: deleteResult }, debug);
+
+        // 6. Verify limit was deleted
+        const limitAfterDelete = await client.getFeeLimit(apiKey);
+        if (limitAfterDelete.limit === testLimit) {
+          throw new Error('getFeeLimit after delete: custom limit still present');
+        }
+        printResult('getFeeLimit (verify deleted)', { success: true, data: limitAfterDelete }, debug);
+        if (!debug) console.log(`      limit: ${limitAfterDelete.limit ? formatStroops(limitAfterDelete.limit) : 'unlimited'}`);
       },
     },
   ];
@@ -354,18 +417,24 @@ main().catch((e) => {
 
 function printResult(label: string, envelope: any, debug: boolean) {
   if (debug) {
+    // Pretty print the full envelope including data, metadata (logs/traces)
+    console.log(`   ${label}:`);
     console.log(JSON.stringify(envelope, null, 2));
     return;
   }
+
   const data = envelope?.data || envelope?.result || {};
   const hash = data?.hash;
   const status = data?.status;
+  const ok = data?.ok;
   const success = envelope?.success;
 
   if (success) {
-    console.log(`   ✓ ${label}: ${hash || status || 'confirmed'}`);
+    // For tx results, show hash; for mgmt results, show ok or just confirmed
+    const detail = hash || status || (ok !== undefined ? `ok=${ok}` : 'ok');
+    console.log(`   ${label}: ${detail}`);
   } else {
     const error = envelope?.error || 'unknown error';
-    console.log(`   ✗ ${label}: ${error}`);
+    console.log(`   ${label}: FAILED - ${error}`);
   }
 }
