@@ -66,9 +66,7 @@ export async function submitWithFeeBumpAndWait(
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
-  console.debug(
-    `[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`
-  );
+  console.debug(`[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`);
   const payload = {
     network,
     transaction_xdr: signedXdr,
@@ -91,12 +89,15 @@ export async function submitWithFeeBumpAndWait(
       if (tracker) {
         await tracker.recordUsage(maxFee);
       }
-      throw pluginError(final.status_reason || 'Transaction failed', {
+      const rawReason = final.status_reason || 'Transaction failed';
+      console.error(`[channels] Transaction failed: ${rawReason}`);
+      const reason = sanitizeReason(rawReason);
+      throw pluginError(reason, {
         code: 'ONCHAIN_FAILED',
         status: HTTP_STATUS.BAD_REQUEST,
         details: {
           status: String(final.status),
-          reason: final.status_reason ?? null,
+          reason,
           id: final.id,
           hash: final.hash ?? null,
         },
@@ -136,4 +137,14 @@ export async function submitWithFeeBumpAndWait(
  */
 function isSignTransactionResponseStellar(data: unknown): data is SignTransactionResponseStellar {
   return data !== null && typeof data === 'object' && 'signature' in data && 'signedXdr' in data;
+}
+
+/** Strip provider wrapper text, extract last segment (e.g., "TxInsufficientBalance") */
+export function sanitizeReason(reason: string): string {
+  const segments = reason.split(/:\s*/);
+  const last = segments[segments.length - 1]?.trim();
+  if (last && last.length > 2 && !last.toLowerCase().includes('provider')) {
+    return last;
+  }
+  return reason.length > 100 ? reason.slice(0, 100) + '...' : reason;
 }
