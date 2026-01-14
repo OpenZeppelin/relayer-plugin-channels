@@ -154,12 +154,12 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
         details: { relayerId: config.fundRelayerId },
       });
     }
-    const fundStatus = await fundRelayer.getRelayerStatus();
-    if (fundStatus.network_type !== 'stellar') {
+    const fundRelayerInfo = await fundRelayer.getRelayer();
+    if (fundRelayerInfo.network_type !== 'stellar') {
       throw pluginError('Fund relayer network type must be stellar', {
         code: 'UNSUPPORTED_NETWORK',
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { network_type: fundStatus.network_type, relayerId: config.fundRelayerId },
+        details: { network_type: fundRelayerInfo.network_type, relayerId: config.fundRelayerId },
       });
     }
 
