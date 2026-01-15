@@ -70,6 +70,7 @@
 
 import { execSync } from 'child_process';
 import {
+  Account,
   Keypair,
   TransactionBuilder,
   Networks,
@@ -146,6 +147,53 @@ function buildNoAuthFuncPayload(contractId: string) {
   return { func: func.toXDR('base64'), auth: auth.map((a: any) => a.toXDR('base64')) };
 }
 
+async function buildUnsignedSorobanXdrWithAuth(
+  contractId: string,
+  passphrase: string,
+  address: string,
+  keypair: Keypair,
+  rpcServer: rpc.Server
+): Promise<string> {
+  // Build invokeHostFunction with signed auth entries but unsigned envelope
+  // This simulates smart wallet flow: passkey signs auth, but no envelope signature
+  const latest = await rpcServer.getLatestLedger();
+  const validUntil = Number(latest.sequence) + 64;
+
+  const invokeArgs = new xdr.InvokeContractArgs({
+    contractAddress: Address.fromString(contractId).toScAddress(),
+    functionName: 'write_with_address_auth',
+    args: [Address.fromString(address).toScVal(), xdr.ScVal.scvU32(999)],
+  });
+
+  const func = xdr.HostFunction.hostFunctionTypeInvokeContract(invokeArgs);
+  const rootInv = new xdr.SorobanAuthorizedInvocation({
+    function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(invokeArgs),
+    subInvocations: [],
+  });
+
+  // Sign the auth entry (simulates passkey signature)
+  const signedAuthEntry = await authorizeInvocation(keypair, validUntil, rootInv, address, passphrase);
+
+  // Build the operation with signed auth
+  const op = Operation.invokeHostFunction({
+    func,
+    auth: [signedAuthEntry],
+  });
+
+  // Use placeholder source - will be replaced by channel account
+  const placeholderAccount = new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0');
+  const tx = new TransactionBuilder(placeholderAccount, {
+    fee: '100',
+    networkPassphrase: passphrase,
+  })
+    .addOperation(op)
+    .setTimeout(30)
+    .build();
+
+  // Return XDR WITHOUT signing the envelope - this is the key difference
+  return tx.toXDR();
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -211,6 +259,15 @@ async function main() {
         const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair);
         const res = await client.submitTransaction({ xdr: tx.toXDR() });
         printResult('xdr-payment', { success: true, data: res }, debug);
+      },
+    },
+    {
+      id: 'xdr-unsigned-soroban',
+      label: 'XDR unsigned: Soroban with signed auth (smart wallet flow)',
+      run: async ({ client, rpc, passphrase, address, keypair, contractId, debug }) => {
+        const unsignedXdr = await buildUnsignedSorobanXdrWithAuth(contractId, passphrase, address, keypair, rpc);
+        const res = await client.submitTransaction({ xdr: unsignedXdr });
+        printResult('xdr-unsigned-soroban', { success: true, data: res }, debug);
       },
     },
     {

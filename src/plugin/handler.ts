@@ -25,15 +25,72 @@ function getApiKey(headers: Record<string, string[]>, headerName: string): strin
   return values?.[0]?.trim() || undefined;
 }
 
+/**
+ * Extracts func and auth from an unsigned Soroban transaction.
+ * Returns null if the transaction is not a single invokeHostFunction operation.
+ */
+export function extractFuncAuthFromUnsignedXdr(
+  tx: Transaction
+): { func: xdr.HostFunction; auth: xdr.SorobanAuthorizationEntry[] } | null {
+  const ops = tx.operations;
+  if (ops.length !== 1) {
+    return null;
+  }
+
+  const envelope = tx.toEnvelope();
+  const rawOp = envelope.v1().tx().operations()[0].body();
+
+  if (rawOp.switch() !== xdr.OperationType.invokeHostFunction()) {
+    return null;
+  }
+
+  const invokeHostFn = rawOp.invokeHostFunctionOp();
+  return {
+    func: invokeHostFn.hostFunction(),
+    auth: invokeHostFn.auth(),
+  };
+}
+
 async function handleXdrSubmit(
   xdrStr: string,
   fundRelayer: Relayer,
+  fundAddress: string,
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
   api: PluginAPI,
+  pool: ChannelPool,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
+
+  // Unsigned XDR: extract func+auth and route through channel path
+  if (tx.signatures.length === 0) {
+    const extracted = extractFuncAuthFromUnsignedXdr(tx);
+    if (!extracted) {
+      throw pluginError('Unsigned XDR must contain exactly one invokeHostFunction operation', {
+        code: 'INVALID_UNSIGNED_XDR',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: {
+          operationCount: tx.operations.length,
+          operationType: tx.operations[0]?.type,
+        },
+      });
+    }
+
+    console.log(`[channels] Unsigned XDR detected, extracting func+auth and routing through channel path`);
+    return handleFuncAuthSubmit(
+      extracted.func,
+      extracted.auth,
+      api,
+      pool,
+      fundRelayer,
+      fundAddress,
+      network,
+      networkPassphrase,
+      tracker
+    );
+  }
+
   const validated = validateExistingTransactionForSubmitOnly(tx);
   const maxFee = calculateMaxFee(validated);
   await tracker?.checkBudget(maxFee);
@@ -137,9 +194,8 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     });
   }
 
-  try {
-    // 1. Validate and parse request (xdr OR func+auth)
-    const request = validateAndParseRequest(params);
+  // 1. Validate and parse request (xdr OR func+auth)
+  const request = validateAndParseRequest(params);
     console.debug(
       `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
     );
@@ -168,9 +224,11 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       return await handleXdrSubmit(
         request.xdr,
         fundRelayer as Relayer,
+        fundInfo.address,
         config.network,
         networkPassphrase,
         api,
+        pool,
         tracker
       );
     }
@@ -186,16 +244,12 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       config.network,
       networkPassphrase,
       tracker
-    );
-  } finally {
-    // Nothing to cleanup here; func-auth path releases locks internally
-  }
+  );
 }
 
 /**
  * Main plugin handler exported for OpenZeppelin Relayer
  */
 export async function handler(context: PluginContext): Promise<any> {
-  const result = await channelAccounts(context);
-  return result;
+  return channelAccounts(context);
 }
