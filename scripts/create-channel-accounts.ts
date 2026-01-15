@@ -672,6 +672,9 @@ async function ensureRelayer(
       network_type: RelayerNetworkType.STELLAR,
       signer_id: signerId,
       paused: false,
+      policies: {
+        fee_payment_strategy: 'relayer',
+      },
     });
     const data = response.data?.data;
     if (!data) {

@@ -54,8 +54,6 @@ export const POLLING = {
 } as const;
 
 export const FEE = {
-  MIN_BASE_FEE: 205,
-  MAX_BASE_FEE: 605,
   // For non-Soroban txs: 100,000 stroops (0.01 XLM) per Stellar best practice
   NON_SOROBAN_FEE: 100_000,
 } as const;
