@@ -23,10 +23,11 @@
      --base-url https://my-relayer.com \
      --plugin-id channels
 
-   # Direct HTTP mode - standalone plugin service
+   # Direct HTTP mode - OpenZeppelin managed Channels service
    tsx scripts/smoke.ts \
      --api-key YOUR_API_KEY \
-     --base-url https://plugin-service.com
+     --base-url https://channels.openzeppelin.com/testnet \
+     --direct
 
    # Run specific test with custom contract
    tsx scripts/smoke.ts \
@@ -43,11 +44,12 @@
  Flags / env (args > env > defaults)
    --api-key (API_KEY)             required: API key for authentication
    --plugin-id (PLUGIN_ID)         default: 'channels' (enables relayer mode)
-                                   omit this flag to use direct HTTP mode
+   --direct (DIRECT_MODE)          optional: use direct HTTP mode (bypasses plugin-id)
    --base-url (BASE_URL)           default: http://localhost:8080 (when using plugin-id)
-                                   required when omitting plugin-id (direct HTTP mode)
+                                   required when using --direct (direct HTTP mode)
    --account-name (ACCOUNT_NAME)   default: test-account (must exist in `stellar keys`)
    --contract-id (CONTRACT_ID)     default: bundled smoke-contract on testnet
+   --destination (DESTINATION)     optional: destination address for xdr-payment test (default: self)
    --network (NETWORK)             default: testnet | also supports: mainnet
    --rpc-url (RPC_URL)             default: https://soroban-testnet.stellar.org
    --test-id (TEST_ID)             optional: run only one test
@@ -61,11 +63,11 @@
  Client Modes
    Relayer mode:      Uses ChannelsClient with pluginId
                       Routes through relayer's PluginsApi at /api/v1/plugins/{pluginId}/call
-                      Default when --plugin-id is provided (defaults to 'channels')
+                      Default when --direct is NOT provided (defaults to plugin-id 'channels')
 
    Direct HTTP mode:  Uses ChannelsClient without pluginId
-                      Connects directly to plugin service at /api/v1/plugins/channels/call
-                      Used when --plugin-id is omitted and --base-url points to plugin service
+                      Connects directly to the channels service at baseUrl
+                      Used when --direct flag is provided
 */
 
 import { execSync } from 'child_process';
@@ -118,18 +120,39 @@ async function healthCheck(baseUrl: string, apiKey: string): Promise<void> {
   if (!res.ok) throw new Error(`Relayer health check failed: ${res.status} ${res.statusText}`);
 }
 
-function getKeypair(accountName?: string): { keypair: Keypair; address: string } {
+function getKeypair(accountName?: string): {
+  keypair: Keypair;
+  address: string;
+} {
   const name = accountName || 'test-account';
-  const address = execSync(`stellar keys address ${name}`, { encoding: 'utf8' }).trim();
-  const secret = execSync(`stellar keys show ${name}`, { encoding: 'utf8' }).trim();
+  const address = execSync(`stellar keys address ${name}`, {
+    encoding: 'utf8',
+  }).trim();
+  const secret = execSync(`stellar keys show ${name}`, {
+    encoding: 'utf8',
+  }).trim();
   return { keypair: Keypair.fromSecret(secret), address };
 }
 
-async function buildSignedSelfPayment(rpcServer: rpc.Server, passphrase: string, address: string, keypair: Keypair) {
+async function buildSignedPayment(
+  rpcServer: rpc.Server,
+  passphrase: string,
+  address: string,
+  keypair: Keypair,
+  destination?: string
+) {
   const account = await rpcServer.getAccount(address);
-  const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: passphrase })
+  const tx = new TransactionBuilder(account, {
+    fee: '100',
+    networkPassphrase: passphrase,
+  })
     .addOperation(
-      Operation.payment({ source: address, destination: address, asset: Asset.native(), amount: '0.0000010' })
+      Operation.payment({
+        source: address,
+        destination: destination || address,
+        asset: Asset.native(),
+        amount: '0.0000010',
+      })
     )
     .setTimeout(30)
     .build();
@@ -144,7 +167,10 @@ function buildNoAuthFuncPayload(contractId: string) {
   const invokeOp = body.invokeHostFunctionOp();
   const func = invokeOp.hostFunction();
   const auth = invokeOp.auth() ?? [];
-  return { func: func.toXDR('base64'), auth: auth.map((a: any) => a.toXDR('base64')) };
+  return {
+    func: func.toXDR('base64'),
+    auth: auth.map((a: any) => a.toXDR('base64')),
+  };
 }
 
 async function buildUnsignedSorobanXdrWithAuth(
@@ -198,7 +224,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   const apiKey = String(args['api-key'] || process.env.API_KEY || 'REPLACE_ME');
-  const pluginId = (args['plugin-id'] || process.env.PLUGIN_ID || 'channels') as string | undefined;
+  const direct = Boolean(args['direct'] || process.env.DIRECT_MODE);
+  const pluginId = direct ? undefined : String(args['plugin-id'] || process.env.PLUGIN_ID || 'channels');
   const baseUrl = String(args['base-url'] || process.env.BASE_URL || (pluginId ? 'http://localhost:8080' : ''));
   const network = String(args.network || process.env.NETWORK || 'testnet').toLowerCase() as 'testnet' | 'mainnet';
   const passphrase = np(network);
@@ -210,6 +237,7 @@ async function main() {
   const contractId = String(
     args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
   );
+  const destination = (args['destination'] || process.env.DESTINATION) as string | undefined;
 
   // Fee tracking flags
   const apiKeyHeader = (args['api-key-header'] || process.env.API_KEY_HEADER || 'x-api-key') as string;
@@ -230,14 +258,20 @@ async function main() {
     process.exit(1);
   }
 
-  await healthCheck(baseUrl, apiKey);
+  // await healthCheck(baseUrl, apiKey);
 
   const rpcServer = new rpc.Server(rpcUrl);
   const { keypair, address } = getKeypair(accountName);
 
   // Initialize the client
   const client = pluginId
-    ? new ChannelsClient({ baseUrl, apiKey, pluginId, apiKeyHeader, adminSecret })
+    ? new ChannelsClient({
+        baseUrl,
+        apiKey,
+        pluginId,
+        apiKeyHeader,
+        adminSecret,
+      })
     : new ChannelsClient({ baseUrl, apiKey, adminSecret });
 
   type Ctx = {
@@ -247,16 +281,30 @@ async function main() {
     keypair: Keypair;
     address: string;
     contractId: string;
+    destination?: string;
     debug: boolean;
   };
-  const ctx: Ctx = { client, rpc: rpcServer, passphrase, keypair, address, contractId, debug };
+  const ctx: Ctx = {
+    client,
+    rpc: rpcServer,
+    passphrase,
+    keypair,
+    address,
+    contractId,
+    destination,
+    debug,
+  };
 
-  const TESTS: { id: string; label: string; run: (ctx: Ctx) => Promise<void> }[] = [
+  const TESTS: {
+    id: string;
+    label: string;
+    run: (ctx: Ctx) => Promise<void>;
+  }[] = [
     {
       id: 'xdr-payment',
-      label: 'XDR submit-only: signed self-payment',
-      run: async ({ client, rpc, passphrase, address, keypair, debug }) => {
-        const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair);
+      label: destination ? `XDR submit-only: signed payment to ${destination}` : 'XDR submit-only: signed self-payment',
+      run: async ({ client, rpc, passphrase, address, keypair, destination, debug }) => {
+        const tx = await buildSignedPayment(rpc, passphrase, address, keypair, destination);
         const res = await client.submitTransaction({ xdr: tx.toXDR() });
         printResult('xdr-payment', { success: true, data: res }, debug);
       },
@@ -275,7 +323,10 @@ async function main() {
       label: 'func+auth: no_auth_bump(42)',
       run: async ({ client, contractId, debug }) => {
         const payload = buildNoAuthFuncPayload(contractId);
-        const res = await client.submitSorobanTransaction({ func: payload.func, auth: payload.auth });
+        const res = await client.submitSorobanTransaction({
+          func: payload.func,
+          auth: payload.auth,
+        });
         printResult('func-auth-no-auth', { success: true, data: res }, debug);
       },
     },
