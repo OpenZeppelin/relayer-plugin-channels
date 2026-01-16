@@ -198,7 +198,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   const apiKey = String(args['api-key'] || process.env.API_KEY || 'REPLACE_ME');
-  const pluginId = (args['plugin-id'] || process.env.PLUGIN_ID || 'channels') as string | undefined;
+  const pluginId = (args['plugin-id'] || process.env.PLUGIN_ID) as string | undefined;
   const baseUrl = String(args['base-url'] || process.env.BASE_URL || (pluginId ? 'http://localhost:8080' : ''));
   const network = String(args.network || process.env.NETWORK || 'testnet').toLowerCase() as 'testnet' | 'mainnet';
   const passphrase = np(network);
@@ -208,7 +208,7 @@ async function main() {
   const debug = Boolean(args['debug'] || process.env.DEBUG);
   const concurrency = parseInt(String(args['concurrency'] || process.env.CONCURRENCY || '1'), 10);
   const contractId = String(
-    args['contract-id'] || process.env.CONTRACT_ID || 'CD3P6XI7YI6ATY5RM2CNXHRRT3LBGPC3WGR2D2OE6EQNVLVEA5HGUELG'
+    args['contract-id'] || process.env.CONTRACT_ID || 'CBYVRE72KVLIHW7G2YJX3X4DN5BNYUGEOMW6NWEN5VM2YYWN7S54IWNI'
   );
 
   // Fee tracking flags
@@ -229,8 +229,6 @@ async function main() {
     console.error('❌ --admin-secret is required when using --log-fees-spent');
     process.exit(1);
   }
-
-  await healthCheck(baseUrl, apiKey);
 
   const rpcServer = new rpc.Server(rpcUrl);
   const { keypair, address } = getKeypair(accountName);
