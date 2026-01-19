@@ -41,10 +41,9 @@ export function validateExistingTransactionForSubmitOnly(tx: Transaction): Trans
       {
         code: 'TIMEBOUNDS_TOO_FAR',
         status: HTTP_STATUS.BAD_REQUEST,
-      },
+      }
     );
   }
 
   return tx;
 }
-

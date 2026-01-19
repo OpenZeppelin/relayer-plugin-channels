@@ -79,7 +79,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
             code: 'INVALID_PARAMS',
             status: HTTP_STATUS.BAD_REQUEST,
             details: { reason: 'source-account credentials not allowed' },
-          },
+          }
         );
       }
     }

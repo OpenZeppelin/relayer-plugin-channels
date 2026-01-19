@@ -37,8 +37,7 @@ export class ChannelPool {
       const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer());
       if (r === null) {
         const jitter =
-          POOL.MUTEX_RETRY_MIN_MS +
-          Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
+          POOL.MUTEX_RETRY_MIN_MS + Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
         await sleep(jitter);
         continue;
       }

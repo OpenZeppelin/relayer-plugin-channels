@@ -123,7 +123,13 @@ describe('FeeTracker', () => {
 
     test('sets periodStart on first consumption', async () => {
       const kv = new FakeKV();
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 });
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      });
 
       const before = Date.now();
       await tracker.recordUsage(1000);
@@ -206,7 +212,13 @@ describe('FeeTracker', () => {
       const periodStart = Date.now() - 10000;
       await kv.set('testnet:api-key-fees:test-key', { consumed: 3000, periodStart });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 });
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      });
       const usage = await tracker.getUsageInfo();
 
       expect(usage.consumed).toBe(3000);
@@ -302,7 +314,13 @@ describe('FeeTracker', () => {
       const recentTime = Date.now() - 1000; // 1 second ago
       await kv.set('testnet:api-key-fees:test-key', { consumed: 5000, periodStart: recentTime });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 }); // 60 second period
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      }); // 60 second period
       const usage = await tracker.getUsageInfo();
       expect(usage.consumed).toBe(5000); // not reset
     });
@@ -312,7 +330,13 @@ describe('FeeTracker', () => {
       const oldTime = Date.now() - 120000; // 2 minutes ago
       await kv.set('testnet:api-key-fees:test-key', { consumed: 5000, periodStart: oldTime });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 }); // 60 second period
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      }); // 60 second period
       const usage = await tracker.getUsageInfo();
       expect(usage.consumed).toBe(0); // reset because period expired
     });
@@ -322,7 +346,13 @@ describe('FeeTracker', () => {
       const oldTime = Date.now() - 120000; // 2 minutes ago
       await kv.set('testnet:api-key-fees:test-key', { consumed: 5000, periodStart: oldTime });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 }); // 60 second period
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      }); // 60 second period
       await tracker.recordUsage(1000);
 
       const data = await kv.get<{ consumed: number; periodStart: number }>('testnet:api-key-fees:test-key');
@@ -335,7 +365,13 @@ describe('FeeTracker', () => {
       const recentTime = Date.now() - 1000; // 1 second ago
       await kv.set('testnet:api-key-fees:test-key', { consumed: 5000, periodStart: recentTime });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 }); // 60 second period
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      }); // 60 second period
       await tracker.recordUsage(1000);
 
       const data = await kv.get<{ consumed: number; periodStart: number }>('testnet:api-key-fees:test-key');
@@ -348,7 +384,13 @@ describe('FeeTracker', () => {
       const oldTime = Date.now() - 120000; // 2 minutes ago
       await kv.set('testnet:api-key-fees:test-key', { consumed: 9000, periodStart: oldTime });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 }); // 60 second period
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      }); // 60 second period
       // Would fail if consumed=9000 + fee=5000 > limit=10000, but period expired so consumed=0
       await expect(tracker.checkBudget(5000)).resolves.toBeUndefined();
     });
@@ -358,7 +400,13 @@ describe('FeeTracker', () => {
       const oldTime = Date.now() - 120000;
       await kv.set('testnet:api-key-fees:test-key', { consumed: 3000, periodStart: oldTime });
 
-      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key', defaultLimit: 10000, resetPeriodMs: 60000 });
+      const tracker = new FeeTracker({
+        kv,
+        network: 'testnet',
+        apiKey: 'test-key',
+        defaultLimit: 10000,
+        resetPeriodMs: 60000,
+      });
       const usage = await tracker.getUsageInfo();
       expect(usage.consumed).toBe(0);
       expect(usage.periodStartAt).toBeUndefined();

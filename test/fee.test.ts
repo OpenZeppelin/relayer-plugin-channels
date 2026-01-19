@@ -1,18 +1,6 @@
 import { describe, test, expect } from 'vitest';
-import {
-  calculateMaxFee,
-  KALE_CONTRACT,
-  INCLUSION_FEE_DEFAULT,
-  INCLUSION_FEE_KALE,
-} from '../src/plugin/fee';
-import {
-  TransactionBuilder,
-  Account,
-  Networks,
-  BASE_FEE,
-  Contract,
-  SorobanDataBuilder,
-} from '@stellar/stellar-sdk';
+import { calculateMaxFee, KALE_CONTRACT, INCLUSION_FEE_DEFAULT, INCLUSION_FEE_KALE } from '../src/plugin/fee';
+import { TransactionBuilder, Account, Networks, BASE_FEE, Contract, SorobanDataBuilder } from '@stellar/stellar-sdk';
 import { FEE } from '../src/plugin/constants';
 
 describe('fee', () => {
@@ -21,9 +9,7 @@ describe('fee', () => {
   const OTHER_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
   function buildSimpleTx(): any {
-    return new TransactionBuilder(sourceAccount, { fee: '100', networkPassphrase: passphrase })
-      .setTimeout(30)
-      .build();
+    return new TransactionBuilder(sourceAccount, { fee: '100', networkPassphrase: passphrase }).setTimeout(30).build();
   }
 
   function buildContractCallTx(contractAddress: string): any {
@@ -38,9 +24,7 @@ describe('fee', () => {
   function buildSorobanTxWithResourceFee(resourceFee: bigint): any {
     const contract = new Contract(OTHER_CONTRACT);
     const op = contract.call('test_method');
-    const sorobanData = new SorobanDataBuilder()
-      .setResourceFee(resourceFee)
-      .build();
+    const sorobanData = new SorobanDataBuilder().setResourceFee(resourceFee).build();
     return new TransactionBuilder(sourceAccount, {
       fee: resourceFee.toString(),
       networkPassphrase: passphrase,

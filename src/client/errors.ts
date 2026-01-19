@@ -19,7 +19,7 @@ export class PluginTransportError extends PluginClientError {
   constructor(
     message: string,
     public readonly statusCode?: number,
-    public readonly errorDetails?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+    public readonly errorDetails?: any // eslint-disable-line @typescript-eslint/no-explicit-any
   ) {
     super(message);
     this.name = 'PluginTransportError';
@@ -39,7 +39,7 @@ export class PluginExecutionError extends PluginClientError {
 
   constructor(
     message: string,
-    public readonly errorDetails?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+    public readonly errorDetails?: any // eslint-disable-line @typescript-eslint/no-explicit-any
   ) {
     super(message);
     this.name = 'PluginExecutionError';
@@ -59,7 +59,7 @@ export class PluginUnexpectedError extends PluginClientError {
 
   constructor(
     message: string,
-    public readonly errorDetails?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+    public readonly errorDetails?: any // eslint-disable-line @typescript-eslint/no-explicit-any
   ) {
     super(message);
     this.name = 'PluginUnexpectedError';

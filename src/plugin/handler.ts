@@ -196,54 +196,54 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
 
   // 1. Validate and parse request (xdr OR func+auth)
   const request = validateAndParseRequest(params);
-    console.debug(
-      `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
-    );
+  console.debug(
+    `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
+  );
 
-    // 2. Get fund relayer
-    const fundRelayer = api.useRelayer(config.fundRelayerId);
-    const fundInfo = await fundRelayer.getRelayer();
-    if (!fundInfo || !fundInfo.address) {
-      throw pluginError('Fund relayer not found', {
-        code: 'RELAYER_UNAVAILABLE',
-        status: HTTP_STATUS.BAD_GATEWAY,
-        details: { relayerId: config.fundRelayerId },
-      });
-    }
-    if (fundInfo.network_type !== 'stellar') {
-      throw pluginError('Fund relayer network type must be stellar', {
-        code: 'UNSUPPORTED_NETWORK',
-        status: HTTP_STATUS.BAD_REQUEST,
-        details: { network_type: fundInfo.network_type, relayerId: config.fundRelayerId },
-      });
-    }
+  // 2. Get fund relayer
+  const fundRelayer = api.useRelayer(config.fundRelayerId);
+  const fundInfo = await fundRelayer.getRelayer();
+  if (!fundInfo || !fundInfo.address) {
+    throw pluginError('Fund relayer not found', {
+      code: 'RELAYER_UNAVAILABLE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { relayerId: config.fundRelayerId },
+    });
+  }
+  if (fundInfo.network_type !== 'stellar') {
+    throw pluginError('Fund relayer network type must be stellar', {
+      code: 'UNSUPPORTED_NETWORK',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: { network_type: fundInfo.network_type, relayerId: config.fundRelayerId },
+    });
+  }
 
-    // 3. Branch by request type
-    if (request.type === 'xdr') {
-      console.log(`[channels] Flow: XDR submit-only`);
-      return await handleXdrSubmit(
-        request.xdr,
-        fundRelayer as Relayer,
-        fundInfo.address,
-        config.network,
-        networkPassphrase,
-        api,
-        pool,
-        tracker
-      );
-    }
-
-    console.log(`[channels] Flow: func+auth with channel account`);
-    return await handleFuncAuthSubmit(
-      request.func,
-      request.auth,
-      api,
-      pool,
+  // 3. Branch by request type
+  if (request.type === 'xdr') {
+    console.log(`[channels] Flow: XDR submit-only`);
+    return await handleXdrSubmit(
+      request.xdr,
       fundRelayer as Relayer,
       fundInfo.address,
       config.network,
       networkPassphrase,
+      api,
+      pool,
       tracker
+    );
+  }
+
+  console.log(`[channels] Flow: func+auth with channel account`);
+  return await handleFuncAuthSubmit(
+    request.func,
+    request.auth,
+    api,
+    pool,
+    fundRelayer as Relayer,
+    fundInfo.address,
+    config.network,
+    networkPassphrase,
+    tracker
   );
 }
 

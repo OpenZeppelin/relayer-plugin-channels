@@ -25,9 +25,7 @@ Event log (newest first):
   });
 
   test('falls back to first line when no data field', () => {
-    expect(parseSimulationError('HostError: Error(Contract, Panic)')).toBe(
-      'HostError: Error(Contract, Panic)'
-    );
+    expect(parseSimulationError('HostError: Error(Contract, Panic)')).toBe('HostError: Error(Contract, Panic)');
   });
 
   test('trims whitespace in fallback', () => {
