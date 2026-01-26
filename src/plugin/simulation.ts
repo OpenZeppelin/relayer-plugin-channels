@@ -65,25 +65,29 @@ export async function simulateAndBuildWithChannel(
 
   if (rpcResponse.error) {
     const { code, message, description, data } = rpcResponse.error as any;
-    throw pluginError('Simulation RPC execution failed', {
+    console.error(`[channels] RPC error: code=${code}, message=${message}, detail=${description || data}`);
+    throw pluginError('Simulation RPC failed', {
       code: 'SIMULATION_RPC_FAILURE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: 'RPC provider error' },
+    });
+  }
+
+  const simResult = {
+    id: String(rpcResponse.id ?? '1'),
+    ...(rpcResponse.result as object),
+  } as rpc.Api.RawSimulateTransactionResponse;
+
+  if ('error' in simResult && simResult.error) {
+    console.error(`[channels] Simulation error: ${simResult.error}`);
+    throw pluginError('Simulation failed', {
+      code: 'SIMULATION_FAILED',
       status: HTTP_STATUS.BAD_REQUEST,
-      details: {
-        rpcCode: code,
-        message,
-        description: description || data,
-      },
+      details: { error: parseSimulationError(simResult.error) },
     });
   }
 
   try {
-    // Format simulation result for SDK's assembleTransaction
-    const simResult = {
-      id: String(rpcResponse.id ?? '1'),
-      ...(rpcResponse.result as object),
-    } as rpc.Api.RawSimulateTransactionResponse;
-    console.debug(`[channels] Simulation result:`, JSON.stringify(simResult, null, 2));
-
     // Use SDK's assembleTransaction to apply simulation results
     const prepared = rpc.assembleTransaction(transaction, simResult).build() as Transaction;
 
@@ -91,7 +95,8 @@ export async function simulateAndBuildWithChannel(
     console.debug(`[channels] Simulation complete: resourceFee=${resourceFee}`);
     return prepared;
   } catch (err: any) {
-    throw pluginError('Simulation result processing failed', {
+    console.error(`[channels] Assembly error: ${err instanceof Error ? err.message : String(err)}`);
+    throw pluginError('Simulation failed', {
       code: 'SIMULATION_FAILED',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
       details: {
@@ -99,4 +104,22 @@ export async function simulateAndBuildWithChannel(
       },
     });
   }
+}
+
+/** Extract human-readable message + error type from simulation error diagnostic events */
+export function parseSimulationError(error: string): string {
+  const firstLine = error.split('\n')[0]?.trim() || 'Simulation failed';
+  const errorType = firstLine.match(/Error\(([^)]+)\)/)?.[1];
+
+  const arrayMatch = error.match(/data:\s*\["((?:[^"\\]|\\.)*)"/);
+  if (arrayMatch?.[1] && arrayMatch[1].length > 3) {
+    return errorType ? `${arrayMatch[1]} (${errorType})` : arrayMatch[1];
+  }
+
+  const stringMatch = error.match(/data:\s*"((?:[^"\\]|\\.)*)"/);
+  if (stringMatch?.[1] && stringMatch[1].length > 3) {
+    return errorType ? `${stringMatch[1]} (${errorType})` : stringMatch[1];
+  }
+
+  return firstLine;
 }

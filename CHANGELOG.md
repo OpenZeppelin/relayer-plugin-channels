@@ -1,5 +1,14 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.6.0
+
+### Minor Changes
+
+- 0c4ba59: fix: return clean error messages instead of raw SDK objects
+  feat: Use getRelayer instead of getRelayerStatus for fund relayer
+  fix: use static fee calculation matching launchtube
+  feat: support unsigned XDR by extracting func+auth automatically
+
 ## 0.5.0
 
 ### Minor Changes
