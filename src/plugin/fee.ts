@@ -4,15 +4,14 @@
  * Static fee calculation for fee bump submissions matching launchtube.
  * - For Soroban transactions: use resourceFee + inclusion fee (BASE_FEE * 2 + 3)
  * - For non-Soroban: use NON_SOROBAN_FEE + inclusion fee
- * - KALE contract gets reduced fee (BASE_FEE * 2 + 1)
+ * - Limited contracts (from LIMITED_CONTRACTS env) get reduced fee (BASE_FEE * 2 + 1)
  */
 
 import { BASE_FEE, Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';
 import { FEE } from './constants';
 
-export const KALE_CONTRACT = 'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA';
 export const INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + 3;
-export const INCLUSION_FEE_KALE = Number(BASE_FEE) * 2 + 1;
+export const INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1;
 
 /**
  * Extract contract ID from a HostFunction (for func+auth flow)
@@ -46,12 +45,14 @@ export function getContractIdFromTransaction(transaction: Transaction): string |
   }
 }
 
-function getInclusionFee(transaction: Transaction): number {
-  const contractId = getContractIdFromTransaction(transaction);
-  return contractId === KALE_CONTRACT ? INCLUSION_FEE_KALE : INCLUSION_FEE_DEFAULT;
+function getInclusionFee(contractId: string | undefined, limitedContracts: Set<string>): number {
+  if (contractId && limitedContracts.has(contractId)) {
+    return INCLUSION_FEE_LIMITED;
+  }
+  return INCLUSION_FEE_DEFAULT;
 }
 
-export function calculateMaxFee(transaction: Transaction): number {
+export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<string> = new Set()): number {
   const envelope = transaction.toEnvelope();
 
   let resourceFee = 0n;
@@ -62,7 +63,8 @@ export function calculateMaxFee(transaction: Transaction): number {
     }
   }
 
-  const inclusionFee = getInclusionFee(transaction);
+  const contractId = getContractIdFromTransaction(transaction);
+  const inclusionFee = getInclusionFee(contractId, limitedContracts);
 
   const fee =
     resourceFee > 0n

@@ -97,7 +97,7 @@ async function handleXdrSubmit(
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
-  const maxFee = calculateMaxFee(validated);
+  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts);
   await tracker?.checkBudget(maxFee);
   return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
 }
@@ -154,7 +154,7 @@ async function handleFuncAuthSubmit(
       networkPassphrase
     );
 
-    const maxFee = calculateMaxFee(signedTx);
+    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts);
     await tracker?.checkBudget(maxFee);
     return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
   } finally {
