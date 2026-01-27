@@ -1,6 +1,11 @@
 import { describe, test, expect } from 'vitest';
-import { ChannelPool } from '../src/plugin/pool';
+import { ChannelPool, AcquireOptions } from '../src/plugin/pool';
 import { FakeKV } from './helpers/fakeKV';
+
+const defaultOptions: AcquireOptions = {
+  limitedContracts: new Set(),
+  capacityRatio: 0.8,
+};
 
 describe('ChannelPool busy mutex', () => {
   test('acquire retries when global mutex is busy, then succeeds', async () => {
@@ -17,7 +22,7 @@ describe('ChannelPool busy mutex', () => {
       void kv.del(globalKey);
     }, 50);
 
-    const lock = await pool.acquire();
+    const lock = await pool.acquire(defaultOptions);
     expect(lock.relayerId).toBe('p1');
     // Release for cleanliness
     await pool.release(lock);
