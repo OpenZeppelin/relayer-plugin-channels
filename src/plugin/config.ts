@@ -16,6 +16,8 @@ export interface ChannelAccountsConfig {
   feeLimit?: number;
   feeResetPeriodMs?: number;
   apiKeyHeader: string;
+  limitedContracts: Set<string>;
+  contractCapacityRatio: number;
 }
 
 function requireEnv(name: string): string {
@@ -68,6 +70,27 @@ function parseApiKeyHeader(): string {
   return trimmed.length > 0 ? trimmed : 'x-api-key';
 }
 
+function parseLimitedContracts(): Set<string> {
+  const raw = process.env.LIMITED_CONTRACTS;
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter((s) => s.length > 0)
+  );
+}
+
+function parseContractCapacityRatio(): number {
+  const raw = process.env.CONTRACT_CAPACITY_RATIO;
+  if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > 1) {
+    return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
+  }
+  return n;
+}
+
 /**
  * Load configuration from environment variables
  */
@@ -88,6 +111,8 @@ export function loadConfig(): ChannelAccountsConfig {
     feeLimit: parseFeeLimit(),
     feeResetPeriodMs: parseFeeResetPeriod(),
     apiKeyHeader: parseApiKeyHeader(),
+    limitedContracts: parseLimitedContracts(),
+    contractCapacityRatio: parseContractCapacityRatio(),
   };
 }
 
