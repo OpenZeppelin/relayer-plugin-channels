@@ -39,6 +39,8 @@ export class ChannelPool {
   /** Acquire a relayerId with a token lock */
   async acquire(options: AcquireOptions): Promise<PoolLock> {
     const maxSpins = POOL.MUTEX_MAX_SPINS;
+    const isLimited = options.contractId && options.limitedContracts.has(options.contractId);
+
     for (let i = 0; i < maxSpins; i++) {
       const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer(options));
       if (r === null) {
@@ -49,6 +51,13 @@ export class ChannelPool {
       }
       return r;
     }
+
+    if (isLimited) {
+      console.log(
+        `[channels] Contract ${options.contractId} limited to ${Math.round(options.capacityRatio * 100)}% capacity - no channels available`
+      );
+    }
+
     throw pluginError('Too many transactions queued. Please try again later', {
       code: 'POOL_CAPACITY',
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,
@@ -73,9 +82,6 @@ export class ChannelPool {
     // If contract is limited, filter to allowed subset
     if (options.contractId && options.limitedContracts.has(options.contractId)) {
       ids = filterChannelsForLimitedContract(ids, options.capacityRatio);
-      console.debug(
-        `[channels] Contract ${options.contractId} limited to ${ids.length} channels (${options.capacityRatio * 100}%)`
-      );
     }
 
     shuffle(ids);

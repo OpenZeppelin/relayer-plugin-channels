@@ -4,7 +4,7 @@
  * Static fee calculation for fee bump submissions matching launchtube.
  * - For Soroban transactions: use resourceFee + inclusion fee (BASE_FEE * 2 + 3)
  * - For non-Soroban: use NON_SOROBAN_FEE + inclusion fee
- * - Limited contracts get reduced fee (BASE_FEE * 2 + 1)
+ * - Limited contracts (from LIMITED_CONTRACTS env) get reduced fee (BASE_FEE * 2 + 1)
  */
 
 import { BASE_FEE, Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';

@@ -1,12 +1,13 @@
 import { describe, test, expect } from 'vitest';
-import { calculateMaxFee, KALE_CONTRACT, INCLUSION_FEE_DEFAULT, INCLUSION_FEE_KALE } from '../src/plugin/fee';
+import { calculateMaxFee, INCLUSION_FEE_DEFAULT, INCLUSION_FEE_LIMITED } from '../src/plugin/fee';
 import { TransactionBuilder, Account, Networks, BASE_FEE, Contract, SorobanDataBuilder } from '@stellar/stellar-sdk';
 import { FEE } from '../src/plugin/constants';
 
 describe('fee', () => {
   const passphrase = Networks.TESTNET;
   const sourceAccount = new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '1');
-  const OTHER_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+  const LIMITED_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+  const OTHER_CONTRACT = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M';
 
   function buildSimpleTx(): any {
     return new TransactionBuilder(sourceAccount, { fee: '100', networkPassphrase: passphrase }).setTimeout(30).build();
@@ -41,9 +42,9 @@ describe('fee', () => {
       expect(INCLUSION_FEE_DEFAULT).toBe(Number(BASE_FEE) * 2 + 3);
     });
 
-    test('KALE inclusion fee matches launchtube (BASE_FEE * 2 + 1 = 201)', () => {
-      expect(INCLUSION_FEE_KALE).toBe(201);
-      expect(INCLUSION_FEE_KALE).toBe(Number(BASE_FEE) * 2 + 1);
+    test('limited inclusion fee matches launchtube (BASE_FEE * 2 + 1 = 201)', () => {
+      expect(INCLUSION_FEE_LIMITED).toBe(201);
+      expect(INCLUSION_FEE_LIMITED).toBe(Number(BASE_FEE) * 2 + 1);
     });
   });
 
@@ -63,16 +64,23 @@ describe('fee', () => {
       expect(fee).toBe(Number(resourceFee) + INCLUSION_FEE_DEFAULT);
     });
 
-    test('non-KALE contract gets default inclusion fee (203)', () => {
+    test('non-limited contract gets default inclusion fee (203)', () => {
       const tx = buildContractCallTx(OTHER_CONTRACT);
       const fee = calculateMaxFee(tx);
       expect(fee).toBe(FEE.NON_SOROBAN_FEE + INCLUSION_FEE_DEFAULT);
     });
 
-    test('KALE contract gets reduced inclusion fee (201)', () => {
-      const tx = buildContractCallTx(KALE_CONTRACT);
-      const fee = calculateMaxFee(tx);
-      expect(fee).toBe(FEE.NON_SOROBAN_FEE + INCLUSION_FEE_KALE);
+    test('limited contract gets reduced inclusion fee (201)', () => {
+      const limitedContracts = new Set([LIMITED_CONTRACT]);
+      const tx = buildContractCallTx(LIMITED_CONTRACT);
+      const fee = calculateMaxFee(tx, limitedContracts);
+      expect(fee).toBe(FEE.NON_SOROBAN_FEE + INCLUSION_FEE_LIMITED);
+    });
+
+    test('same contract without being in limited set gets default fee', () => {
+      const tx = buildContractCallTx(LIMITED_CONTRACT);
+      const fee = calculateMaxFee(tx, new Set());
+      expect(fee).toBe(FEE.NON_SOROBAN_FEE + INCLUSION_FEE_DEFAULT);
     });
   });
 });
