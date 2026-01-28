@@ -27,9 +27,7 @@ function getInclusionFee(transaction: Transaction): number {
     }
 
     const invokeContract = invokeOp.func.invokeContract();
-    const contract = StrKey.encodeContract(
-      invokeContract.contractAddress().contractId() as unknown as Buffer
-    );
+    const contract = StrKey.encodeContract(invokeContract.contractAddress().contractId() as unknown as Buffer);
 
     return contract === KALE_CONTRACT ? INCLUSION_FEE_KALE : INCLUSION_FEE_DEFAULT;
   } catch {
@@ -50,10 +48,7 @@ export function calculateMaxFee(transaction: Transaction): number {
 
   const inclusionFee = getInclusionFee(transaction);
 
-  const fee =
-    resourceFee > 0n
-      ? resourceFee + BigInt(inclusionFee)
-      : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
+  const fee = resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
 
   console.debug(
     `[channels] Calculated max_fee: ${Number(fee)} stroops (resourceFee: ${resourceFee}, inclusionFee: ${inclusionFee})`

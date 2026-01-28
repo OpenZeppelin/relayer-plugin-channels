@@ -18,7 +18,7 @@ import { FeeTracker } from './fee-tracking';
 
 export function isManagementRequest(params: any): boolean {
   return Boolean(
-    params && typeof params === 'object' && (params as any).management && typeof (params as any).management === 'object',
+    params && typeof params === 'object' && (params as any).management && typeof (params as any).management === 'object'
   );
 }
 

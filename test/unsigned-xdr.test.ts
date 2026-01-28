@@ -1,13 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import {
-  TransactionBuilder,
-  Account,
-  Networks,
-  Contract,
-  Operation,
-  Asset,
-  xdr,
-} from '@stellar/stellar-sdk';
+import { TransactionBuilder, Account, Networks, Contract, Operation, Asset, xdr } from '@stellar/stellar-sdk';
 import { extractFuncAuthFromUnsignedXdr } from '../src/plugin/handler';
 
 describe('extractFuncAuthFromUnsignedXdr', () => {
