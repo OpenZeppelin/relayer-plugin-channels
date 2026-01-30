@@ -1,5 +1,13 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.7.0
+
+### Minor Changes
+
+- 1f9f2ae: fix: update smoke test defaults for direct HTTP mode
+  chore: Add prettier config
+  feat: add per-contract capacity limits for channel pool
+
 ## 0.6.0
 
 ### Minor Changes
