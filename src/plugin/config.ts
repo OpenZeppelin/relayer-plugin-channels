@@ -4,7 +4,7 @@
  * Environment-driven configuration for the channel accounts plugin.
  */
 
-import { Networks } from '@stellar/stellar-sdk';
+import { Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS, CONFIG } from './constants';
 
@@ -73,19 +73,30 @@ function parseApiKeyHeader(): string {
 function parseLimitedContracts(): Set<string> {
   const raw = process.env.LIMITED_CONTRACTS;
   if (!raw) return new Set();
-  return new Set(
-    raw
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter((s) => s.length > 0)
-  );
+  const contracts = raw
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter((s) => s.length > 0);
+
+  // Validate each contract address
+  for (const contract of contracts) {
+    if (!StrKey.isValidContract(contract)) {
+      throw pluginError(`Invalid contract address in LIMITED_CONTRACTS: ${contract}`, {
+        code: 'CONFIG_INVALID',
+        status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+        details: { contract },
+      });
+    }
+  }
+
+  return new Set(contracts);
 }
 
 function parseContractCapacityRatio(): number {
   const raw = process.env.CONTRACT_CAPACITY_RATIO;
   if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0 || n > 1) {
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
     return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
   }
   return n;
