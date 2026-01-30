@@ -13,6 +13,12 @@ import { HTTP_STATUS, POOL } from './constants';
 
 export type PoolLock = { relayerId: string; token: string };
 
+export type AcquireOptions = {
+  contractId?: string;
+  limitedContracts: Set<string>;
+  capacityRatio: number;
+};
+
 type MembershipDoc = { relayerIds: string[] };
 
 export class ChannelPool {
@@ -31,10 +37,12 @@ export class ChannelPool {
   }
 
   /** Acquire a relayerId with a token lock */
-  async acquire(): Promise<PoolLock> {
+  async acquire(options: AcquireOptions): Promise<PoolLock> {
     const maxSpins = POOL.MUTEX_MAX_SPINS;
+    const isLimited = options.contractId && options.limitedContracts.has(options.contractId);
+
     for (let i = 0; i < maxSpins; i++) {
-      const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer());
+      const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer(options));
       if (r === null) {
         const jitter =
           POOL.MUTEX_RETRY_MIN_MS + Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
@@ -43,6 +51,13 @@ export class ChannelPool {
       }
       return r;
     }
+
+    if (isLimited) {
+      console.log(
+        `[channels] Contract ${options.contractId} limited to ${Math.round(options.capacityRatio * 100)}% capacity - no channels available`
+      );
+    }
+
     throw pluginError('Too many transactions queued. Please try again later', {
       code: 'POOL_CAPACITY',
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,
@@ -55,14 +70,20 @@ export class ChannelPool {
   }
 
   // Inside the mutex: pick an available relayer and set its channel lock
-  private async tryLockAnyRelayer(): Promise<PoolLock | null> {
-    const ids = await this.getRelayerIdsFromKV();
+  private async tryLockAnyRelayer(options: AcquireOptions): Promise<PoolLock | null> {
+    let ids = await this.getRelayerIdsFromKV();
     if (ids.length === 0) {
       throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
         code: 'NO_CHANNELS_CONFIGURED',
         status: HTTP_STATUS.SERVICE_UNAVAILABLE,
       });
     }
+
+    // If contract is limited, filter to allowed subset
+    if (options.contractId && options.limitedContracts.has(options.contractId)) {
+      ids = filterChannelsForLimitedContract(ids, options.capacityRatio);
+    }
+
     shuffle(ids);
     for (const relayerId of ids) {
       const key = this.lockKey(relayerId);
@@ -131,4 +152,31 @@ function normalizeId(id: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Simple hash for deterministic channel partitioning.
+ * Returns a number 0-99 for modulo-based filtering.
+ */
+function simpleHash(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash) % 100;
+}
+
+/**
+ * Filter channels for limited contracts using deterministic partitioning.
+ * Returns exactly floor(ratio * N) channels, sorted by hash for stability.
+ * Always returns at least 1 channel (min guarantee).
+ */
+function filterChannelsForLimitedContract(ids: string[], ratio: number): string[] {
+  const k = Math.max(1, Math.floor(ratio * ids.length));
+  return ids
+    .slice()
+    .sort((a, b) => simpleHash(a) - simpleHash(b) || a.localeCompare(b))
+    .slice(0, k);
 }

@@ -7,7 +7,7 @@
 
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 import type { PluginAPI, Relayer } from '@openzeppelin/relayer-sdk';
-import { PoolLock, ChannelPool } from './pool';
+import { PoolLock, ChannelPool, AcquireOptions } from './pool';
 import { loadConfig, getNetworkPassphrase } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
@@ -16,7 +16,7 @@ import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
 import { HTTP_STATUS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateAndBuildWithChannel } from './simulation';
-import { calculateMaxFee } from './fee';
+import { calculateMaxFee, getContractIdFromFunc } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 
@@ -59,6 +59,7 @@ async function handleXdrSubmit(
   networkPassphrase: string,
   api: PluginAPI,
   pool: ChannelPool,
+  acquireOptions: AcquireOptions,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
@@ -78,6 +79,9 @@ async function handleXdrSubmit(
     }
 
     console.log(`[channels] Unsigned XDR detected, extracting func+auth and routing through channel path`);
+    // Update acquireOptions with contractId from extracted func
+    const contractId = getContractIdFromFunc(extracted.func);
+    const updatedOptions: AcquireOptions = { ...acquireOptions, contractId };
     return handleFuncAuthSubmit(
       extracted.func,
       extracted.auth,
@@ -87,12 +91,13 @@ async function handleXdrSubmit(
       fundAddress,
       network,
       networkPassphrase,
+      updatedOptions,
       tracker
     );
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
-  const maxFee = calculateMaxFee(validated);
+  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts);
   await tracker?.checkBudget(maxFee);
   return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
 }
@@ -106,11 +111,12 @@ async function handleFuncAuthSubmit(
   fundAddress: string,
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
+  acquireOptions: AcquireOptions,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   let poolLock: PoolLock | undefined;
   try {
-    poolLock = await pool.acquire();
+    poolLock = await pool.acquire(acquireOptions);
     const channelRelayer = api.useRelayer(poolLock.relayerId);
     const channelInfo = await channelRelayer.getRelayer();
     console.log(`[channels] Acquired channel: ${poolLock.relayerId}`);
@@ -148,7 +154,7 @@ async function handleFuncAuthSubmit(
       networkPassphrase
     );
 
-    const maxFee = calculateMaxFee(signedTx);
+    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts);
     await tracker?.checkBudget(maxFee);
     return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
   } finally {
@@ -218,7 +224,13 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     });
   }
 
-  // 3. Branch by request type
+  // 3. Build acquire options for contract capacity limits
+  const acquireOptions: AcquireOptions = {
+    limitedContracts: config.limitedContracts,
+    capacityRatio: config.contractCapacityRatio,
+  };
+
+  // 4. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
     return await handleXdrSubmit(
@@ -229,9 +241,14 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       networkPassphrase,
       api,
       pool,
+      acquireOptions,
       tracker
     );
   }
+
+  // Extract contractId for func+auth flow
+  const contractId = getContractIdFromFunc(request.func);
+  const funcAcquireOptions: AcquireOptions = { ...acquireOptions, contractId };
 
   console.log(`[channels] Flow: func+auth with channel account`);
   return await handleFuncAuthSubmit(
@@ -243,6 +260,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     fundInfo.address,
     config.network,
     networkPassphrase,
+    funcAcquireOptions,
     tracker
   );
 }

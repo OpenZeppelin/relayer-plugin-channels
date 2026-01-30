@@ -16,6 +16,7 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
 - [Development](#development)
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Contract Capacity Limits](#contract-capacity-limits)
 - [Management API](#management-api)
   - [List Channel Accounts](#list-channel-accounts)
   - [Set Channel Accounts](#set-channel-accounts)
@@ -224,6 +225,10 @@ export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set)
 export FEE_RESET_PERIOD_SECONDS=86400     # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
 export API_KEY_HEADER="x-api-key"         # Header name to extract API key (default: x-api-key)
+
+# Contract capacity limits (optional)
+export LIMITED_CONTRACTS="CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA"  # Comma-separated contract addresses
+export CONTRACT_CAPACITY_RATIO=0.8        # Max ratio of pool for limited contracts (default: 0.8 = 80%)
 ```
 
 Your Relayer should now contain:
@@ -290,6 +295,40 @@ The Channels plugin accepts Soroban operations and handles all the complexity of
 - **Fund Account**: Holds funds and pays for fee bumps
 - **Channel Accounts**: Provide unique sequence numbers for parallel transaction submission
 - The channel account is the transaction source and signer; the fund account wraps it in a fee bump
+
+## Contract Capacity Limits
+
+High-volume contracts can monopolize the channel pool, starving other traffic. Contract capacity limits allow you to reserve a portion of the pool for non-limited contracts.
+
+### Configuration
+
+```bash
+# Comma-separated list of contract addresses to limit (case-insensitive)
+export LIMITED_CONTRACTS="CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA,CABC123..."
+
+# Maximum ratio of pool that limited contracts can use (default: 0.8)
+export CONTRACT_CAPACITY_RATIO=0.8
+```
+
+### How It Works
+
+- **Limited contracts** can only acquire from a deterministic subset of channels (e.g., 80% of pool)
+- **Unlisted contracts** have full access to all channels
+- The subset is selected deterministically using a hash-based partition, ensuring stable channel assignment
+- Minimum 1 channel is always guaranteed, even at very low ratios
+
+### Example
+
+With 10 channel accounts and `CONTRACT_CAPACITY_RATIO=0.8`:
+- Limited contracts can use up to 8 channels (`floor(10 * 0.8)`)
+- 2 channels are always reserved for non-limited traffic
+- If all 8 limited slots are in use, limited contracts get `POOL_CAPACITY` error while non-limited contracts can still acquire
+
+### Notes
+
+- Contract IDs are matched case-insensitively (normalized to uppercase internally)
+- If contract ID cannot be extracted from the request (non-`invokeContract` operations), no limit is applied
+- Zero runtime overhead for unlimited contracts
 
 ## Management API
 

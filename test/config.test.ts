@@ -69,4 +69,56 @@ describe('config', () => {
     process.env.PLUGIN_ADMIN_SECRET = '  trimmed  ';
     expect(loadConfig().adminSecret).toBe('trimmed');
   });
+
+  test('limited contracts validation', () => {
+    const validContract = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+
+    delete process.env.LIMITED_CONTRACTS;
+    expect(loadConfig().limitedContracts.size).toBe(0);
+
+    process.env.LIMITED_CONTRACTS = validContract;
+    expect(loadConfig().limitedContracts).toEqual(new Set([validContract]));
+
+    // Multiple contracts
+    process.env.LIMITED_CONTRACTS = `${validContract}, ${validContract}`;
+    expect(loadConfig().limitedContracts.size).toBe(1); // deduplicated
+
+    // Lowercase is uppercased
+    process.env.LIMITED_CONTRACTS = validContract.toLowerCase();
+    expect(loadConfig().limitedContracts.has(validContract)).toBe(true);
+
+    // Invalid contract throws
+    process.env.LIMITED_CONTRACTS = 'invalid-contract';
+    expect(() => loadConfig()).toThrow('Invalid contract address');
+
+    // Mixed valid/invalid throws
+    process.env.LIMITED_CONTRACTS = `${validContract},invalid`;
+    expect(() => loadConfig()).toThrow('Invalid contract address');
+  });
+
+  test('contract capacity ratio', () => {
+    delete process.env.CONTRACT_CAPACITY_RATIO;
+    expect(loadConfig().contractCapacityRatio).toBe(0.8); // default
+
+    process.env.CONTRACT_CAPACITY_RATIO = '0.5';
+    expect(loadConfig().contractCapacityRatio).toBe(0.5);
+
+    // Allow 0 (blocks limited contracts entirely)
+    process.env.CONTRACT_CAPACITY_RATIO = '0';
+    expect(loadConfig().contractCapacityRatio).toBe(0);
+
+    // Allow 1 (no restriction)
+    process.env.CONTRACT_CAPACITY_RATIO = '1';
+    expect(loadConfig().contractCapacityRatio).toBe(1);
+
+    // Invalid values fall back to default
+    process.env.CONTRACT_CAPACITY_RATIO = '-0.1';
+    expect(loadConfig().contractCapacityRatio).toBe(0.8);
+
+    process.env.CONTRACT_CAPACITY_RATIO = '1.1';
+    expect(loadConfig().contractCapacityRatio).toBe(0.8);
+
+    process.env.CONTRACT_CAPACITY_RATIO = 'invalid';
+    expect(loadConfig().contractCapacityRatio).toBe(0.8);
+  });
 });
