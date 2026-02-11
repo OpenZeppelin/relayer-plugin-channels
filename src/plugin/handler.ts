@@ -15,7 +15,7 @@ import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
 import { HTTP_STATUS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
-import { simulateAndBuildWithChannel } from './simulation';
+import { simulateAndBuildWithChannel, simulateReadOnlyCheck } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
@@ -114,6 +114,19 @@ async function handleFuncAuthSubmit(
   acquireOptions: AcquireOptions,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
+  // Read-only check: simulate before acquiring a channel to detect read-only calls
+  const readOnlyCheck = await simulateReadOnlyCheck(func, auth, fundAddress, fundRelayer, networkPassphrase);
+  if (readOnlyCheck.isReadOnly) {
+    console.log(`[channels] Read-only call detected, returning simulation result`);
+    return {
+      transactionId: null,
+      status: 'readonly',
+      hash: null,
+      returnValue: readOnlyCheck.returnValue,
+      latestLedger: readOnlyCheck.latestLedger,
+    };
+  }
+
   let poolLock: PoolLock | undefined;
   try {
     poolLock = await pool.acquire(acquireOptions);

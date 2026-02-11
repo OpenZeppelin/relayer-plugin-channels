@@ -68,6 +68,10 @@ export interface ChannelsTransactionResponse {
   hash: string | null;
   /** Transaction status */
   status: string | null;
+  /** Present only for read-only calls: the base64-encoded xdr.ScVal return value */
+  returnValue?: string;
+  /** Present only for read-only calls: the latest ledger at simulation time */
+  latestLedger?: number;
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];
