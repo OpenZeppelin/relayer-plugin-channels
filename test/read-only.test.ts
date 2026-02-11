@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { Contract, Networks, SorobanDataBuilder, xdr } from '@stellar/stellar-sdk';
-import { simulateReadOnlyCheck, ReadOnlyCheckResult } from '../src/plugin/simulation';
+import { simulateTransaction, buildWithChannel, SimulationResult } from '../src/plugin/simulation';
 
 // Build a minimal SorobanTransactionData with empty readWrite footprint (read-only)
 function buildReadOnlyTransactionData(): string {
@@ -34,7 +34,7 @@ function makeRelayerMock(result: object, error?: any) {
 const CONTRACT_ID = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 const SOURCE_ADDRESS = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 
-describe('simulateReadOnlyCheck', () => {
+describe('simulateTransaction', () => {
   const passphrase = Networks.TESTNET;
   let func: xdr.HostFunction;
 
@@ -57,7 +57,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     expect(result.isReadOnly).toBe(true);
     expect(result.returnValue).toBe('AAAAAQ==');
@@ -72,7 +72,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     expect(result.isReadOnly).toBe(true);
     expect(result.returnValue).toBe('AAAAAQ==');
@@ -86,7 +86,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     expect(result.isReadOnly).toBe(false);
     expect(result.returnValue).toBeUndefined();
@@ -100,7 +100,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     expect(result.isReadOnly).toBe(false);
     expect(result.returnValue).toBeUndefined();
@@ -114,7 +114,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     expect(result.isReadOnly).toBe(false);
   });
@@ -127,7 +127,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     expect(result.isReadOnly).toBe(false);
   });
@@ -139,7 +139,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     // No transactionData means hasReadWrite stays false, and no auth → read-only
     expect(result.isReadOnly).toBe(true);
@@ -151,7 +151,7 @@ describe('simulateReadOnlyCheck', () => {
       minResourceFee: '100',
     });
 
-    const result = await simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
 
     // No results means no auth, no transactionData means no readWrite → read-only
     // returnValue will be undefined since there are no results
@@ -164,7 +164,7 @@ describe('simulateReadOnlyCheck', () => {
       rpc: vi.fn().mockRejectedValue(new Error('Network timeout')),
     } as any;
 
-    await expect(simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase)).rejects.toThrow(
+    await expect(simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase)).rejects.toThrow(
       'Simulation network request failed'
     );
   });
@@ -178,7 +178,7 @@ describe('simulateReadOnlyCheck', () => {
       }),
     } as any;
 
-    await expect(simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase)).rejects.toThrow(
+    await expect(simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase)).rejects.toThrow(
       'Simulation RPC failed'
     );
   });
@@ -189,7 +189,7 @@ describe('simulateReadOnlyCheck', () => {
       latestLedger: 12345,
     });
 
-    await expect(simulateReadOnlyCheck(func, [], SOURCE_ADDRESS, relayer, passphrase)).rejects.toThrow(
+    await expect(simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase)).rejects.toThrow(
       'Simulation failed'
     );
   });
@@ -221,10 +221,67 @@ describe('simulateReadOnlyCheck', () => {
     });
 
     // Should not throw when passing auth entries
-    const result = await simulateReadOnlyCheck(func, [authEntry], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [authEntry], SOURCE_ADDRESS, relayer, passphrase);
     expect(result).toBeDefined();
 
     // Verify the relayer.rpc was called (transaction was built and sent)
+    expect(relayer.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns rawSimResult for reuse by buildWithChannel', async () => {
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: ['some_auth'] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger: 12345,
+      minResourceFee: '100',
+    };
+    const relayer = makeRelayerMock(rpcResult);
+
+    const result = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    expect(result.isReadOnly).toBe(false);
+    expect(result.rawSimResult).toBeDefined();
+    expect(result.rawSimResult.latestLedger).toBe(12345);
+    expect(result.rawSimResult.minResourceFee).toBe('100');
+  });
+});
+
+describe('buildWithChannel', () => {
+  const passphrase = Networks.TESTNET;
+  const CHANNEL_ADDRESS = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+  let func: xdr.HostFunction;
+
+  beforeEach(() => {
+    const contract = new Contract(CONTRACT_ID);
+    const op = contract.call('balance', xdr.ScVal.scvBool(true));
+    const opXdr = op.toXDR();
+    const parsedOp = xdr.Operation.fromXDR(opXdr);
+    func = parsedOp.body().invokeHostFunctionOp().hostFunction();
+  });
+
+  test('assembles a transaction from cached simulation result without network calls', async () => {
+    // First simulate to get a real rawSimResult
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger: 12345,
+      minResourceFee: '100',
+    };
+    const relayer = makeRelayerMock(rpcResult);
+    const simResult = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    // buildWithChannel should NOT make any network calls
+    const tx = buildWithChannel(
+      func,
+      [],
+      { address: CHANNEL_ADDRESS, sequence: '100' },
+      passphrase,
+      simResult.rawSimResult
+    );
+
+    expect(tx).toBeDefined();
+    expect(tx.source).toBe(CHANNEL_ADDRESS);
+    // Verify the relayer was only called once (by simulateTransaction, not by buildWithChannel)
     expect(relayer.rpc).toHaveBeenCalledTimes(1);
   });
 });
