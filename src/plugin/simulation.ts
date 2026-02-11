@@ -111,7 +111,7 @@ export interface ReadOnlyCheckResult {
   /** base64-encoded xdr.ScVal return value, present when isReadOnly is true */
   returnValue?: string;
   /** latest ledger at simulation time */
-  latestLedger: number;
+  latestLedger?: number;
 }
 
 /**
