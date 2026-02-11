@@ -22,6 +22,10 @@ export interface ChannelAccountsResponse {
   transactionId: string | null;
   status: string | null;
   hash: string | null;
+  /** Present only for read-only calls: the base64-encoded xdr.ScVal return value */
+  returnValue?: string;
+  /** Present only for read-only calls: the latest ledger at simulation time */
+  latestLedger?: number;
 }
 
 /**

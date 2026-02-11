@@ -236,6 +236,32 @@ describe('ChannelsClient', () => {
         status: 'confirmed',
       });
     });
+
+    test('should include returnValue and latestLedger for read-only calls', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            transactionId: null,
+            hash: null,
+            status: 'readonly',
+            returnValue: 'AAAAAQ==',
+            latestLedger: 12345,
+          },
+        },
+      });
+
+      const result = await client.submitSorobanTransaction({
+        func: 'BASE64FUNC',
+        auth: [],
+      });
+
+      expect(result.status).toBe('readonly');
+      expect(result.returnValue).toBe('AAAAAQ==');
+      expect(result.latestLedger).toBe(12345);
+      expect(result.transactionId).toBeNull();
+      expect(result.hash).toBeNull();
+    });
   });
 
   describe('submitTransaction - Via Relayer', () => {

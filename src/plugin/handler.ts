@@ -15,7 +15,7 @@ import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
 import { HTTP_STATUS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
-import { simulateAndBuildWithChannel } from './simulation';
+import { simulateTransaction, buildWithChannel } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
@@ -114,6 +114,20 @@ async function handleFuncAuthSubmit(
   acquireOptions: AcquireOptions,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
+  // Simulate once — used for both read-only detection and transaction assembly
+  const simulation = await simulateTransaction(func, auth, fundAddress, fundRelayer, networkPassphrase);
+
+  if (simulation.isReadOnly) {
+    console.log(`[channels] Read-only call detected, returning simulation result`);
+    return {
+      transactionId: null,
+      status: 'readonly',
+      hash: null,
+      returnValue: simulation.returnValue,
+      latestLedger: simulation.latestLedger,
+    };
+  }
+
   let poolLock: PoolLock | undefined;
   try {
     poolLock = await pool.acquire(acquireOptions);
@@ -136,13 +150,13 @@ async function handleFuncAuthSubmit(
       });
     }
 
-    const built = await simulateAndBuildWithChannel(
+    // Assemble the transaction using the cached simulation result — no second RPC call
+    const built = buildWithChannel(
       func,
       auth,
       { address: channelInfo.address, sequence: channelStatus.sequence_number },
-      fundAddress,
-      fundRelayer,
-      networkPassphrase
+      networkPassphrase,
+      simulation.rawSimResult
     );
 
     const signedTx = await signWithChannelAndFund(
