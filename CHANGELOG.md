@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.8.0
+
+### Minor Changes
+
+- e1a3c84: feat: Read only logic for transactions
+
 ## 0.7.0
 
 ### Minor Changes
