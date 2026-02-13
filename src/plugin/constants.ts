@@ -37,15 +37,15 @@ export const POOL = {
 
 // Time Constants
 export const TIME = {
-  MAX_TIME_BOUND_OFFSET_SECONDS: 30,
+  MAX_TIME_BOUND_OFFSET_SECONDS: 120,
 } as const;
 
 // Simulation-related defaults
 export const SIMULATION = {
   DEFAULT_FEE: '100',
   MIN_TIME_BOUND: 0,
-  MAX_TIME_BOUND_OFFSET_SECONDS: 30,
-  MAX_FUTURE_TIME_BOUND_SECONDS: 30,
+  MAX_TIME_BOUND_OFFSET_SECONDS: 120,
+  MAX_FUTURE_TIME_BOUND_SECONDS: 120,
 } as const;
 
 // Polling for transactionWait
