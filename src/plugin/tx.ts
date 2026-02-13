@@ -35,14 +35,26 @@ export function validateExistingTransactionForSubmitOnly(tx: Transaction): Trans
   }
 
   // Time bounds sanity
-  if (tx.timeBounds?.maxTime && Number(tx.timeBounds.maxTime) - now > SIMULATION.MAX_FUTURE_TIME_BOUND_SECONDS) {
-    throw pluginError(
-      `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${SIMULATION.MAX_FUTURE_TIME_BOUND_SECONDS} seconds`,
-      {
-        code: 'TIMEBOUNDS_TOO_FAR',
+  if (tx.timeBounds?.maxTime && Number(tx.timeBounds.maxTime) > 0) {
+    const maxTime = Number(tx.timeBounds.maxTime);
+
+    if (maxTime < now) {
+      throw pluginError('Transaction has expired: `timeBounds.maxTime` is in the past', {
+        code: 'TIMEBOUNDS_EXPIRED',
         status: HTTP_STATUS.BAD_REQUEST,
-      }
-    );
+        details: { maxTime, now },
+      });
+    }
+
+    if (maxTime - now > SIMULATION.MAX_FUTURE_TIME_BOUND_SECONDS) {
+      throw pluginError(
+        `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${SIMULATION.MAX_FUTURE_TIME_BOUND_SECONDS} seconds`,
+        {
+          code: 'TIMEBOUNDS_TOO_FAR',
+          status: HTTP_STATUS.BAD_REQUEST,
+        }
+      );
+    }
   }
 
   return tx;

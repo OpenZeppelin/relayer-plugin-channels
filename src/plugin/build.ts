@@ -56,6 +56,14 @@ export function rebuildWithChannel(params: RebuildParams): Transaction {
     const maxTime = Number(inputTx.timeBounds.maxTime);
 
     if (maxTime > 0) {
+      if (maxTime < now) {
+        throw pluginError('Transaction has expired: maxTime is in the past', {
+          code: 'TIMEBOUNDS_EXPIRED',
+          status: HTTP_STATUS.BAD_REQUEST,
+          details: { maxTime, now },
+        });
+      }
+
       const maxAllowedTime = now + TIME.MAX_TIME_BOUND_OFFSET_SECONDS;
       if (maxTime > maxAllowedTime) {
         throw pluginError(
