@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.9.0
+
+### Minor Changes
+
+- ae032ad: Increase time-bounds tolerance to 120 seconds and reject expired transactions in submit and rebuild paths.
+
 ## 0.8.0
 
 ### Minor Changes
