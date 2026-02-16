@@ -14,7 +14,7 @@ import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
 import { HTTP_STATUS } from './constants';
-import { Transaction, xdr } from '@stellar/stellar-sdk';
+import { Keypair, Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
@@ -49,6 +49,43 @@ export function extractFuncAuthFromUnsignedXdr(
     func: invokeHostFn.hostFunction(),
     auth: invokeHostFn.auth(),
   };
+}
+
+async function getAccountSequence(relayer: Relayer, address: string): Promise<string> {
+  const accountKey = xdr.LedgerKey.account(
+    new xdr.LedgerKeyAccount({
+      accountId: Keypair.fromPublicKey(address).xdrPublicKey(),
+    })
+  );
+
+  const response = await relayer.rpc({
+    jsonrpc: '2.0',
+    id: Math.floor(Math.random() * 1e8).toString(),
+    method: 'getLedgerEntries',
+    params: {
+      keys: [accountKey.toXDR('base64')],
+    },
+  });
+
+  if (response.error) {
+    throw pluginError('Failed to get sequence from channel relayer', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: response.error.message },
+    });
+  }
+
+  const entries = (response.result as any).entries;
+  if (!entries || entries.length === 0) {
+    throw pluginError('Channel account not found on ledger', {
+      code: 'ACCOUNT_NOT_FOUND',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address },
+    });
+  }
+
+  const accountEntry = xdr.LedgerEntryData.fromXDR(entries[0].xdr, 'base64');
+  return accountEntry.account().seqNum().toString();
 }
 
 async function handleXdrSubmit(
@@ -141,20 +178,21 @@ async function handleFuncAuthSubmit(
         details: { relayerId: poolLock.relayerId },
       });
     }
-    const channelStatus = await channelRelayer.getRelayerStatus();
-    if (channelStatus.network_type !== 'stellar') {
+    if (channelInfo.network_type !== 'stellar') {
       throw pluginError('Channel relayer network type must be stellar', {
         code: 'UNSUPPORTED_NETWORK',
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { network_type: channelStatus.network_type, relayerId: poolLock.relayerId },
+        details: { network_type: channelInfo.network_type, relayerId: poolLock.relayerId },
       });
     }
+
+    const sequence = await getAccountSequence(channelRelayer, channelInfo.address);
 
     // Assemble the transaction using the cached simulation result — no second RPC call
     const built = buildWithChannel(
       func,
       auth,
-      { address: channelInfo.address, sequence: channelStatus.sequence_number },
+      { address: channelInfo.address, sequence },
       networkPassphrase,
       simulation.rawSimResult
     );
