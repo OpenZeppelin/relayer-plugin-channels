@@ -226,6 +226,14 @@ describe('simulateTransaction', () => {
 
     // Verify the relayer.rpc was called (transaction was built and sent)
     expect(relayer.rpc).toHaveBeenCalledTimes(1);
+    expect(relayer.rpc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'simulateTransaction',
+        params: expect.objectContaining({
+          authMode: 'enforce',
+        }),
+      })
+    );
   });
 
   test('returns rawSimResult for reuse by buildWithChannel', async () => {

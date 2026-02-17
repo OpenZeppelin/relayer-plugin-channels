@@ -62,7 +62,8 @@ export async function simulateTransaction(
       jsonrpc: '2.0',
       id: Math.floor(Math.random() * 1e8).toString(),
       method: 'simulateTransaction',
-      params: { transaction: transaction.toXDR() },
+      // Enforce mode validates auth entry signatures during simulation.
+      params: { transaction: transaction.toXDR(), authMode: SIMULATION.AUTH_MODE },
     });
   } catch (err: any) {
     throw pluginError('Simulation network request failed', {

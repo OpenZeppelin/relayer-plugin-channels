@@ -46,6 +46,7 @@ export const SIMULATION = {
   MIN_TIME_BOUND: 0,
   MAX_TIME_BOUND_OFFSET_SECONDS: 120,
   MAX_FUTURE_TIME_BOUND_SECONDS: 120,
+  AUTH_MODE: 'enforce',
 } as const;
 
 // Polling for transactionWait
