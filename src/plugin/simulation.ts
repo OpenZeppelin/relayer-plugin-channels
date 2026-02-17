@@ -27,6 +27,11 @@ export interface SimulationResult {
   rawSimResult: rpc.Api.RawSimulateTransactionResponse;
 }
 
+interface SimulationFailure {
+  code: string;
+  message: string;
+}
+
 /**
  * Simulate a transaction to obtain the full simulation response and detect
  * whether the call is read-only.
@@ -89,11 +94,13 @@ export async function simulateTransaction(
   } as rpc.Api.RawSimulateTransactionResponse;
 
   if ('error' in simResult && simResult.error) {
+    const parsedError = parseSimulationError(simResult.error);
+    const failure = classifySimulationFailure(simResult.error, parsedError);
     console.error(`[channels] Simulation error: ${simResult.error}`);
-    throw pluginError('Simulation failed', {
-      code: 'SIMULATION_FAILED',
+    throw pluginError(failure.message, {
+      code: failure.code,
       status: HTTP_STATUS.BAD_REQUEST,
-      details: { error: parseSimulationError(simResult.error) },
+      details: { error: parsedError, authMode: SIMULATION.AUTH_MODE },
     });
   }
 
@@ -191,4 +198,26 @@ export function parseSimulationError(error: string): string {
   }
 
   return firstLine;
+}
+
+function classifySimulationFailure(rawError: string, parsedError: string): SimulationFailure {
+  const isEnforcedAuthValidation =
+    SIMULATION.AUTH_MODE === 'enforce' &&
+    (/\bError\(Auth,/i.test(rawError) ||
+      /\brequire_auth\b/i.test(rawError) ||
+      /\bsignature\b/i.test(rawError) ||
+      /\btx_bad_auth\b/i.test(rawError) ||
+      /\bbad[_\s]?auth\b/i.test(rawError));
+
+  if (isEnforcedAuthValidation) {
+    return {
+      code: 'SIGNED_AUTH_VALIDATION_FAILED',
+      message: `Signed auth entry validation failed in enforce simulation: ${parsedError}`,
+    };
+  }
+
+  return {
+    code: 'SIMULATION_FAILED',
+    message: 'Simulation failed',
+  };
 }

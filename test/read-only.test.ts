@@ -194,6 +194,25 @@ describe('simulateTransaction', () => {
     );
   });
 
+  test('maps enforce-mode auth failures to dedicated validation error', async () => {
+    const relayer = makeRelayerMock({
+      error:
+        'HostError: Error(Auth, InvalidInput)\n' +
+        'Event log (newest first):\n' +
+        '0: [Diagnostic Event] topics:[error, Error(Auth, InvalidInput)], data:"signature has expired"',
+      latestLedger: 12345,
+    });
+
+    try {
+      await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+      throw new Error('Expected simulateTransaction to throw');
+    } catch (err: any) {
+      expect(err.code).toBe('SIGNED_AUTH_VALIDATION_FAILED');
+      expect(String(err.message)).toContain('Signed auth entry validation failed in enforce simulation');
+      expect(String(err.message)).toContain('signature has expired (Auth, InvalidInput)');
+    }
+  });
+
   test('passes auth parameter through to the simulation', async () => {
     const authEntry = xdr.SorobanAuthorizationEntry.fromXDR(
       xdr.SorobanAuthorizationEntry.toXDR(
