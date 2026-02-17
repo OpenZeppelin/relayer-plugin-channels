@@ -4,7 +4,7 @@
  * Signing and submission logic for channel account transactions.
  */
 
-import { Transaction } from '@stellar/stellar-sdk';
+import { Transaction, xdr } from '@stellar/stellar-sdk';
 import {
   pluginError,
   Relayer,
@@ -15,6 +15,11 @@ import {
 import { HTTP_STATUS } from './constants';
 import { ChannelAccountsResponse } from './types';
 import { FeeTracker } from './fee-tracking';
+
+export interface SubmitContext {
+  contractId?: string;
+  isLimited?: boolean;
+}
 
 /**
  * Sign transaction with both channel and fund relayers
@@ -63,7 +68,8 @@ export async function submitWithFeeBumpAndWait(
   network: 'testnet' | 'mainnet',
   maxFee: number,
   api: PluginAPI,
-  tracker?: FeeTracker
+  tracker?: FeeTracker,
+  context?: SubmitContext
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
   console.debug(`[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`);
@@ -90,7 +96,18 @@ export async function submitWithFeeBumpAndWait(
         await tracker.recordUsage(maxFee);
       }
       const rawReason = final.status_reason || 'Transaction failed';
-      console.error(`[channels] Transaction failed: ${rawReason}`);
+      const decoded = decodeTransactionResult(rawReason);
+      const contractType = context?.isLimited ? 'limited' : 'default';
+      const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
+      if (decoded?.resultCode === 'txInsufficientFee') {
+        console.error(
+          `${base}, reason=txInsufficientFee, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
+        );
+      } else if (decoded) {
+        console.error(`${base}, reason=${decoded.resultCode}`);
+      } else {
+        console.error(`${base}, reason=${rawReason}`);
+      }
       const reason = sanitizeReason(rawReason);
       throw pluginError(reason, {
         code: 'ONCHAIN_FAILED',
@@ -137,6 +154,33 @@ export async function submitWithFeeBumpAndWait(
  */
 function isSignTransactionResponseStellar(data: unknown): data is SignTransactionResponseStellar {
   return data !== null && typeof data === 'object' && 'signature' in data && 'signedXdr' in data;
+}
+
+/** Try to decode a transaction result XDR from the reason string */
+export function decodeTransactionResult(reason: string): { feeCharged: number; resultCode: string } | null {
+  try {
+    const match = reason.match(/([A-Za-z0-9+/=]{20,})$/);
+    if (!match) return null;
+    const result = xdr.TransactionResult.fromXDR(match[1], 'base64');
+    let resultCode = result.result().switch().name;
+
+    // Unwrap fee bump inner failure to get the actual result code
+    if (resultCode === 'txFeeBumpInnerFailed') {
+      try {
+        const innerResult = result.result().innerResultPair().result();
+        resultCode = innerResult.result().switch().name;
+      } catch {
+        // keep outer result code if unwrap fails
+      }
+    }
+
+    return {
+      feeCharged: Number(result.feeCharged().toBigInt()),
+      resultCode,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Strip provider wrapper text, extract last segment (e.g., "TxInsufficientBalance") */
