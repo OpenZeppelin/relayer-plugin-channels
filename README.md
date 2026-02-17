@@ -229,6 +229,10 @@ export API_KEY_HEADER="x-api-key"         # Header name to extract API key (defa
 # Contract capacity limits (optional)
 export LIMITED_CONTRACTS="CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA"  # Comma-separated contract addresses
 export CONTRACT_CAPACITY_RATIO=0.8        # Max ratio of pool for limited contracts (default: 0.8 = 80%)
+
+# Inclusion fee overrides (optional)
+export INCLUSION_FEE_DEFAULT=203           # Inclusion fee in stroops for regular contracts (default: BASE_FEE * 2 + 3 = 203)
+export INCLUSION_FEE_LIMITED=201           # Inclusion fee in stroops for limited contracts (default: BASE_FEE * 2 + 1 = 201)
 ```
 
 Your Relayer should now contain:

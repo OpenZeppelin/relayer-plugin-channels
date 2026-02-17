@@ -2,16 +2,19 @@
  * fee.ts
  *
  * Static fee calculation for fee bump submissions matching launchtube.
- * - For Soroban transactions: use resourceFee + inclusion fee (BASE_FEE * 2 + 3)
+ * - For Soroban transactions: use resourceFee + inclusion fee
  * - For non-Soroban: use NON_SOROBAN_FEE + inclusion fee
- * - Limited contracts (from LIMITED_CONTRACTS env) get reduced fee (BASE_FEE * 2 + 1)
+ * - Limited contracts (from LIMITED_CONTRACTS env) get reduced fee
+ * - Inclusion fees are configurable via INCLUSION_FEE_DEFAULT and INCLUSION_FEE_LIMITED env vars
  */
 
-import { BASE_FEE, Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';
+import { Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';
 import { FEE } from './constants';
 
-export const INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + 3;
-export const INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1;
+export interface InclusionFees {
+  inclusionFeeDefault: number;
+  inclusionFeeLimited: number;
+}
 
 /**
  * Extract contract ID from a HostFunction (for func+auth flow)
@@ -45,14 +48,14 @@ export function getContractIdFromTransaction(transaction: Transaction): string |
   }
 }
 
-function getInclusionFee(contractId: string | undefined, limitedContracts: Set<string>): number {
+function getInclusionFee(contractId: string | undefined, limitedContracts: Set<string>, fees: InclusionFees): number {
   if (contractId && limitedContracts.has(contractId)) {
-    return INCLUSION_FEE_LIMITED;
+    return fees.inclusionFeeLimited;
   }
-  return INCLUSION_FEE_DEFAULT;
+  return fees.inclusionFeeDefault;
 }
 
-export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<string> = new Set()): number {
+export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<string>, fees: InclusionFees): number {
   const envelope = transaction.toEnvelope();
 
   let resourceFee = 0n;
@@ -64,7 +67,7 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
   }
 
   const contractId = getContractIdFromTransaction(transaction);
-  const inclusionFee = getInclusionFee(contractId, limitedContracts);
+  const inclusionFee = getInclusionFee(contractId, limitedContracts, fees);
 
   const fee = resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
 

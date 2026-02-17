@@ -15,7 +15,6 @@ import { pluginError } from '@openzeppelin/relayer-sdk';
 import { loadConfig } from './config';
 import type { ChannelAccountsConfig } from './config';
 import { HTTP_STATUS } from './constants';
-import { INCLUSION_FEE_DEFAULT, INCLUSION_FEE_LIMITED } from './fee';
 import { FeeTracker } from './fee-tracking';
 
 export function isManagementRequest(params: any): boolean {
@@ -267,8 +266,8 @@ async function getPoolStats(config: ChannelAccountsConfig, kv: PluginKVStore): P
       limitedContracts: Array.from(config.limitedContracts),
     },
     fees: {
-      inclusionFeeDefault: INCLUSION_FEE_DEFAULT,
-      inclusionFeeLimited: INCLUSION_FEE_LIMITED,
+      inclusionFeeDefault: config.inclusionFeeDefault,
+      inclusionFeeLimited: config.inclusionFeeLimited,
     },
   };
 }

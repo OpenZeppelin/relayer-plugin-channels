@@ -16,7 +16,7 @@ import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
 import { HTTP_STATUS } from './constants';
 import { Keypair, Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
-import { calculateMaxFee, getContractIdFromFunc } from './fee';
+import { calculateMaxFee, getContractIdFromFunc, InclusionFees } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 
@@ -183,6 +183,7 @@ async function handleXdrSubmit(
   api: PluginAPI,
   pool: ChannelPool,
   acquireOptions: AcquireOptions,
+  fees: InclusionFees,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
@@ -215,12 +216,13 @@ async function handleXdrSubmit(
       network,
       networkPassphrase,
       updatedOptions,
+      fees,
       tracker
     );
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
-  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts);
+  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts, fees);
   await tracker?.checkBudget(maxFee);
   return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
 }
@@ -235,6 +237,7 @@ async function handleFuncAuthSubmit(
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
   acquireOptions: AcquireOptions,
+  fees: InclusionFees,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   // Simulate once — used for both read-only detection and transaction assembly
@@ -292,7 +295,7 @@ async function handleFuncAuthSubmit(
       networkPassphrase
     );
 
-    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts);
+    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts, fees);
     await tracker?.checkBudget(maxFee);
     return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
   } finally {
@@ -368,6 +371,11 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     capacityRatio: config.contractCapacityRatio,
   };
 
+  const fees: InclusionFees = {
+    inclusionFeeDefault: config.inclusionFeeDefault,
+    inclusionFeeLimited: config.inclusionFeeLimited,
+  };
+
   // 4. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
@@ -380,6 +388,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       api,
       pool,
       acquireOptions,
+      fees,
       tracker
     );
   }
@@ -399,6 +408,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     config.network,
     networkPassphrase,
     funcAcquireOptions,
+    fees,
     tracker
   );
 }
