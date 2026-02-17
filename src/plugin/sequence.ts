@@ -27,6 +27,10 @@ function seqKey(network: string, address: string): string {
   return `${network}:channel:seq:${address}`;
 }
 
+/**
+ * Fetch the current sequence number for an account directly from chain
+ * via `getLedgerEntries` RPC. Throws on any RPC or decoding failure.
+ */
 export async function getAccountSequence(relayer: Relayer, address: string): Promise<string> {
   let accountKey: xdr.LedgerKey;
   try {
@@ -158,14 +162,22 @@ export async function getSequence(
   address: string
 ): Promise<string> {
   const key = seqKey(network, address);
-  const cached = await kv.get<SeqCacheEntry>(key);
-  if (cached?.sequence) {
-    const age = Date.now() - (cached.storedAt ?? 0);
-    if (age < SEQ_CACHE_MAX_AGE_MS) {
-      console.debug(`[channels] Sequence cache hit: address=${address}, seq=${cached.sequence}, age=${age}ms`);
-      return cached.sequence;
+  try {
+    const cached = await kv.get<SeqCacheEntry>(key);
+    if (cached?.sequence) {
+      const age = Date.now() - (cached.storedAt ?? 0);
+      if (age < SEQ_CACHE_MAX_AGE_MS) {
+        console.debug(`[channels] Sequence cache hit: address=${address}, seq=${cached.sequence}, age=${age}ms`);
+        return cached.sequence;
+      }
+      console.debug(`[channels] Sequence cache stale: address=${address}, age=${age}ms, refetching`);
     }
-    console.debug(`[channels] Sequence cache stale: address=${address}, age=${age}ms, refetching`);
+  } catch (err) {
+    console.warn(`[channels] Failed to read sequence from KV, falling back to chain`, {
+      address,
+      key,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
   return getAccountSequence(relayer, address);
 }

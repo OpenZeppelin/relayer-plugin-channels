@@ -64,6 +64,21 @@ describe('sequence cache', () => {
       expect(seq).toBe('250');
       expect(relayer.rpc).toHaveBeenCalled();
     });
+
+    test('falls back to chain when kv.get throws', async () => {
+      const brokenKv = {
+        get: vi.fn().mockRejectedValue(new Error('KV read error')),
+        set: vi.fn(),
+        del: vi.fn(),
+      } as unknown as FakeKV;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const relayer = mockRelayerWithSequence('300');
+      const seq = await getSequence(brokenKv, NETWORK, relayer, ADDRESS);
+      expect(seq).toBe('300');
+      expect(relayer.rpc).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 
   describe('commitSequence', () => {
@@ -96,6 +111,19 @@ describe('sequence cache', () => {
       await clearSequence(kv, NETWORK, ADDRESS);
       const stored = await kv.get(KV_KEY);
       expect(stored).toBeNull();
+    });
+
+    test('does not throw on KV error', async () => {
+      const brokenKv = {
+        get: vi.fn(),
+        set: vi.fn(),
+        del: vi.fn().mockRejectedValue(new Error('KV down')),
+      } as unknown as FakeKV;
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await expect(clearSequence(brokenKv, NETWORK, ADDRESS)).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
     });
   });
 });
