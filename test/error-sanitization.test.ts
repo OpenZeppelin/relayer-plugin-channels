@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { parseSimulationError } from '../src/plugin/simulation';
-import { sanitizeReason, decodeTransactionResult } from '../src/plugin/submit';
+import { sanitizeReason, decodeTransactionResult, buildStellarLabTransactionUrl } from '../src/plugin/submit';
 
 describe('parseSimulationError', () => {
   test('extracts message and error type from data array', () => {
@@ -139,9 +139,10 @@ describe('decodeTransactionResult', () => {
   test('decodes insufficient fee error with fee details', () => {
     const reason = 'Submission failed: Unexpected error: Transaction submission error: AAAAAAAAliP////3AAAAAA==';
     const result = decodeTransactionResult(reason);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       feeCharged: 38435,
       resultCode: 'txInsufficientFee',
+      outerResultCode: 'txInsufficientFee',
     });
   });
 
@@ -151,6 +152,8 @@ describe('decodeTransactionResult', () => {
     const result = decodeTransactionResult(reason);
     expect(result).not.toBeNull();
     expect(result!.resultCode).toBe('txBadSeq');
+    expect(result!.outerResultCode).toBe('txFeeBumpInnerFailed');
+    expect(result!.innerResultCode).toBe('txBadSeq');
   });
 
   test('returns null for reason without XDR', () => {
@@ -163,5 +166,25 @@ describe('decodeTransactionResult', () => {
 
   test('returns null for empty string', () => {
     expect(decodeTransactionResult('')).toBeNull();
+  });
+});
+
+describe('buildStellarLabTransactionUrl', () => {
+  test('builds mainnet URL', () => {
+    const url = buildStellarLabTransactionUrl('mainnet', 'abc123');
+    expect(url).toContain('network$id=mainnet');
+    expect(url).toContain('label=Mainnet');
+    expect(url).toContain('horizonUrl=https:////horizon.stellar.org');
+    expect(url).toContain('rpcUrl=https:////mainnet.sorobanrpc.com');
+    expect(url).toContain('txDashboard$transactionHash=abc123');
+  });
+
+  test('builds testnet URL', () => {
+    const url = buildStellarLabTransactionUrl('testnet', 'def456');
+    expect(url).toContain('network$id=testnet');
+    expect(url).toContain('label=Testnet');
+    expect(url).toContain('horizonUrl=https:////horizon-testnet.stellar.org');
+    expect(url).toContain('rpcUrl=https:////soroban-testnet.stellar.org');
+    expect(url).toContain('txDashboard$transactionHash=def456');
   });
 });
