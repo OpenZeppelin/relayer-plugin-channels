@@ -12,11 +12,11 @@ import { loadConfig, getNetworkPassphrase } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
-import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
+import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from './submit';
 import { HTTP_STATUS } from './constants';
-import { Transaction, xdr } from '@stellar/stellar-sdk';
+import { Keypair, Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
-import { calculateMaxFee, getContractIdFromFunc } from './fee';
+import { calculateMaxFee, getContractIdFromFunc, InclusionFees, getContractIdFromTransaction } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 
@@ -51,6 +51,129 @@ export function extractFuncAuthFromUnsignedXdr(
   };
 }
 
+type LedgerEntryRpcItem = { xdr?: unknown };
+type LedgerEntriesRpcResult = { entries?: LedgerEntryRpcItem[] };
+
+export async function getAccountSequence(relayer: Relayer, address: string): Promise<string> {
+  let accountKey: xdr.LedgerKey;
+  try {
+    accountKey = xdr.LedgerKey.account(
+      new xdr.LedgerKeyAccount({
+        accountId: Keypair.fromPublicKey(address).xdrPublicKey(),
+      })
+    );
+  } catch (error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'invalid_channel_account_address',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw pluginError('Invalid channel account address', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address, message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+
+  let response;
+  try {
+    response = await relayer.rpc({
+      jsonrpc: '2.0',
+      id: Math.floor(Math.random() * 1e8).toString(),
+      method: 'getLedgerEntries',
+      params: {
+        keys: [accountKey.toXDR('base64')],
+      },
+    });
+  } catch (error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_request_failed',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw pluginError('Failed to get sequence from channel relayer', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+
+  if (response.error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_error_response',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: response.error.message,
+    });
+    throw pluginError('Failed to get sequence from channel relayer', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: response.error.message },
+    });
+  }
+
+  const result = response.result as LedgerEntriesRpcResult | null | undefined;
+  const entries = result?.entries;
+  if (!Array.isArray(entries)) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_invalid_result_shape',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+    });
+    throw pluginError('Invalid RPC response for account sequence', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address },
+    });
+  }
+
+  if (!entries || entries.length === 0) {
+    console.warn('[channels] Sequence fetch returned no account entries', {
+      event: 'sequence_account_not_found',
+      code: 'ACCOUNT_NOT_FOUND',
+      address,
+    });
+    throw pluginError('Channel account not found on ledger', {
+      code: 'ACCOUNT_NOT_FOUND',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address },
+    });
+  }
+
+  const firstEntryXdr = entries[0]?.xdr;
+  if (typeof firstEntryXdr !== 'string') {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_invalid_entry_xdr',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+    });
+    throw pluginError('Invalid RPC response for account sequence', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address },
+    });
+  }
+
+  try {
+    const accountEntry = xdr.LedgerEntryData.fromXDR(firstEntryXdr, 'base64');
+    return accountEntry.account().seqNum().toString();
+  } catch (error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_xdr_decode_failed',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw pluginError('Failed to decode account sequence from ledger entry', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address, message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+}
+
 async function handleXdrSubmit(
   xdrStr: string,
   fundRelayer: Relayer,
@@ -60,6 +183,7 @@ async function handleXdrSubmit(
   api: PluginAPI,
   pool: ChannelPool,
   acquireOptions: AcquireOptions,
+  fees: InclusionFees,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, networkPassphrase);
@@ -92,14 +216,20 @@ async function handleXdrSubmit(
       network,
       networkPassphrase,
       updatedOptions,
+      fees,
       tracker
     );
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
-  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts);
+  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts, fees);
+  const contractId = getContractIdFromTransaction(validated);
   await tracker?.checkBudget(maxFee);
-  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
+  const submitContext: SubmitContext = {
+    contractId,
+    isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
+  };
+  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker, submitContext);
 }
 
 async function handleFuncAuthSubmit(
@@ -112,6 +242,7 @@ async function handleFuncAuthSubmit(
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
   acquireOptions: AcquireOptions,
+  fees: InclusionFees,
   tracker?: FeeTracker
 ): Promise<ChannelAccountsResponse> {
   // Simulate once — used for both read-only detection and transaction assembly
@@ -141,20 +272,21 @@ async function handleFuncAuthSubmit(
         details: { relayerId: poolLock.relayerId },
       });
     }
-    const channelStatus = await channelRelayer.getRelayerStatus();
-    if (channelStatus.network_type !== 'stellar') {
+    if (channelInfo.network_type !== 'stellar') {
       throw pluginError('Channel relayer network type must be stellar', {
         code: 'UNSUPPORTED_NETWORK',
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { network_type: channelStatus.network_type, relayerId: poolLock.relayerId },
+        details: { network_type: channelInfo.network_type, relayerId: poolLock.relayerId },
       });
     }
+
+    const sequence = await getAccountSequence(channelRelayer, channelInfo.address);
 
     // Assemble the transaction using the cached simulation result — no second RPC call
     const built = buildWithChannel(
       func,
       auth,
-      { address: channelInfo.address, sequence: channelStatus.sequence_number },
+      { address: channelInfo.address, sequence },
       networkPassphrase,
       simulation.rawSimResult
     );
@@ -168,9 +300,14 @@ async function handleFuncAuthSubmit(
       networkPassphrase
     );
 
-    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts);
+    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts, fees);
+    const contractId = getContractIdFromFunc(func);
     await tracker?.checkBudget(maxFee);
-    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
+    const submitContext: SubmitContext = {
+      contractId,
+      isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
+    };
+    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker, submitContext);
   } finally {
     if (poolLock) {
       await pool.release(poolLock);
@@ -244,6 +381,11 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     capacityRatio: config.contractCapacityRatio,
   };
 
+  const fees: InclusionFees = {
+    inclusionFeeDefault: config.inclusionFeeDefault,
+    inclusionFeeLimited: config.inclusionFeeLimited,
+  };
+
   // 4. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
@@ -256,6 +398,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       api,
       pool,
       acquireOptions,
+      fees,
       tracker
     );
   }
@@ -275,6 +418,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     config.network,
     networkPassphrase,
     funcAcquireOptions,
+    fees,
     tracker
   );
 }

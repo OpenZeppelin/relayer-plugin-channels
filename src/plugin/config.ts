@@ -4,9 +4,13 @@
  * Environment-driven configuration for the channel accounts plugin.
  */
 
-import { Networks, StrKey } from '@stellar/stellar-sdk';
+import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS, CONFIG } from './constants';
+
+// Default inclusion fees (matching launchtube)
+const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + 3; // 203
+const DEFAULT_INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1; // 201
 
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
@@ -18,6 +22,8 @@ export interface ChannelAccountsConfig {
   apiKeyHeader: string;
   limitedContracts: Set<string>;
   contractCapacityRatio: number;
+  inclusionFeeDefault: number;
+  inclusionFeeLimited: number;
 }
 
 function requireEnv(name: string): string {
@@ -92,6 +98,14 @@ function parseLimitedContracts(): Set<string> {
   return new Set(contracts);
 }
 
+function parseInclusionFee(envVar: string, defaultValue: number): number {
+  const raw = process.env[envVar];
+  if (!raw) return defaultValue;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return defaultValue;
+  return Math.floor(n);
+}
+
 function parseContractCapacityRatio(): number {
   const raw = process.env.CONTRACT_CAPACITY_RATIO;
   if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
@@ -124,6 +138,8 @@ export function loadConfig(): ChannelAccountsConfig {
     apiKeyHeader: parseApiKeyHeader(),
     limitedContracts: parseLimitedContracts(),
     contractCapacityRatio: parseContractCapacityRatio(),
+    inclusionFeeDefault: parseInclusionFee('INCLUSION_FEE_DEFAULT', DEFAULT_INCLUSION_FEE_DEFAULT),
+    inclusionFeeLimited: parseInclusionFee('INCLUSION_FEE_LIMITED', DEFAULT_INCLUSION_FEE_LIMITED),
   };
 }
 

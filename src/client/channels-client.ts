@@ -13,6 +13,7 @@ import type {
   GetFeeLimitResponse,
   SetFeeLimitResponse,
   DeleteFeeLimitResponse,
+  GetStatsResponse,
   PluginResponse,
 } from './types';
 
@@ -243,6 +244,28 @@ export class ChannelsClient {
         action: 'deleteFeeLimit',
         adminSecret: this.requireAdminSecret(),
         apiKey,
+      },
+    });
+  }
+
+  /**
+   * Get pool health stats including capacity, config, and fees (requires adminSecret)
+   *
+   * @returns Pool stats with size, locked/available counts, config, and fee info
+   * @throws {Error} If adminSecret not provided in config
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
+   *
+   * @example
+   * const stats = await client.getStats();
+   * console.log(stats.pool.available);
+   */
+  async getStats(): Promise<GetStatsResponse> {
+    return this.call<GetStatsResponse>({
+      management: {
+        action: 'stats',
+        adminSecret: this.requireAdminSecret(),
       },
     });
   }
