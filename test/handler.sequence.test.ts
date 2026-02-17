@@ -1,7 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { xdr } from '@stellar/stellar-sdk';
 import type { Relayer } from '@openzeppelin/relayer-sdk';
-import { getAccountSequence } from '../src/plugin/handler';
+import { getAccountSequence } from '../src/plugin/sequence';
 
 const ADDRESS = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 

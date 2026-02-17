@@ -99,10 +99,12 @@ export async function submitWithFeeBumpAndWait(
       const decoded = decodeTransactionResult(rawReason);
       const contractType = context?.isLimited ? 'limited' : 'default';
       const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
-      if (decoded?.resultCode === 'txInsufficientFee') {
-        console.error(
-          `${base}, reason=txInsufficientFee, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
-        );
+      if (decoded && isTxInsufficientFeeError(decoded.resultCode)) {
+        const feeInfo =
+          decoded.feeCharged != null
+            ? `, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
+            : '';
+        console.error(`${base}, reason=txInsufficientFee${feeInfo}`);
       } else if (decoded) {
         console.error(`${base}, reason=${decoded.resultCode}`);
       } else {
@@ -156,8 +158,19 @@ function isSignTransactionResponseStellar(data: unknown): data is SignTransactio
   return data !== null && typeof data === 'object' && 'signature' in data && 'signedXdr' in data;
 }
 
-/** Try to decode a transaction result XDR from the reason string */
-export function decodeTransactionResult(reason: string): { feeCharged: number; resultCode: string } | null {
+/** Try to extract the transaction result code from the reason string.
+ *  Supports two formats:
+ *  1. Relayer status_reason: "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: TxFailed."
+ *  2. Submission errors with trailing base64 XDR (includes feeCharged)
+ */
+export function decodeTransactionResult(reason: string): { feeCharged?: number; resultCode: string } | null {
+  // Format 1: relayer status_reason with human-readable result code
+  const reasonMatch = reason.match(/Specific XDR reason:\s*(\w+)/);
+  if (reasonMatch) {
+    return { resultCode: reasonMatch[1] };
+  }
+
+  // Format 2: trailing base64 XDR
   try {
     const match = reason.match(/([A-Za-z0-9+/=]{20,})$/);
     if (!match) return null;
@@ -181,6 +194,11 @@ export function decodeTransactionResult(reason: string): { feeCharged: number; r
   } catch {
     return null;
   }
+}
+
+/** Check if the result code indicates an insufficient fee error (case-insensitive). */
+function isTxInsufficientFeeError(resultCode: string | undefined): boolean {
+  return resultCode?.toLowerCase() === 'txinsufficientfee';
 }
 
 /** Strip provider wrapper text, extract last segment (e.g., "TxInsufficientBalance") */

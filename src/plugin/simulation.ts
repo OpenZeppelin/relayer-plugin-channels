@@ -13,7 +13,7 @@ import { HTTP_STATUS, SIMULATION } from './constants';
 
 export interface ChannelAccount {
   address: string;
-  sequence: string; // from relayer status
+  sequence: string; // from KV cache or chain
 }
 
 export interface SimulationResult {

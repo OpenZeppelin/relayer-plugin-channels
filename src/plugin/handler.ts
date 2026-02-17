@@ -6,7 +6,7 @@
  */
 
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
-import type { PluginAPI, Relayer } from '@openzeppelin/relayer-sdk';
+import type { PluginAPI, PluginKVStore, Relayer } from '@openzeppelin/relayer-sdk';
 import { PoolLock, ChannelPool, AcquireOptions } from './pool';
 import { loadConfig, getNetworkPassphrase } from './config';
 import { ChannelAccountsResponse } from './types';
@@ -14,11 +14,12 @@ import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from './submit';
 import { HTTP_STATUS } from './constants';
-import { Keypair, Transaction, xdr } from '@stellar/stellar-sdk';
+import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc, InclusionFees, getContractIdFromTransaction } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
+import { getSequence, commitSequence, clearSequence } from './sequence';
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
   const values = headers[headerName];
@@ -51,129 +52,6 @@ export function extractFuncAuthFromUnsignedXdr(
   };
 }
 
-type LedgerEntryRpcItem = { xdr?: unknown };
-type LedgerEntriesRpcResult = { entries?: LedgerEntryRpcItem[] };
-
-export async function getAccountSequence(relayer: Relayer, address: string): Promise<string> {
-  let accountKey: xdr.LedgerKey;
-  try {
-    accountKey = xdr.LedgerKey.account(
-      new xdr.LedgerKeyAccount({
-        accountId: Keypair.fromPublicKey(address).xdrPublicKey(),
-      })
-    );
-  } catch (error) {
-    console.error('[channels] Sequence fetch failed', {
-      event: 'invalid_channel_account_address',
-      code: 'FAILED_TO_GET_SEQUENCE',
-      address,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    throw pluginError('Invalid channel account address', {
-      code: 'FAILED_TO_GET_SEQUENCE',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { address, message: error instanceof Error ? error.message : String(error) },
-    });
-  }
-
-  let response;
-  try {
-    response = await relayer.rpc({
-      jsonrpc: '2.0',
-      id: Math.floor(Math.random() * 1e8).toString(),
-      method: 'getLedgerEntries',
-      params: {
-        keys: [accountKey.toXDR('base64')],
-      },
-    });
-  } catch (error) {
-    console.error('[channels] Sequence fetch failed', {
-      event: 'sequence_rpc_request_failed',
-      code: 'FAILED_TO_GET_SEQUENCE',
-      address,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    throw pluginError('Failed to get sequence from channel relayer', {
-      code: 'FAILED_TO_GET_SEQUENCE',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { message: error instanceof Error ? error.message : String(error) },
-    });
-  }
-
-  if (response.error) {
-    console.error('[channels] Sequence fetch failed', {
-      event: 'sequence_rpc_error_response',
-      code: 'FAILED_TO_GET_SEQUENCE',
-      address,
-      message: response.error.message,
-    });
-    throw pluginError('Failed to get sequence from channel relayer', {
-      code: 'FAILED_TO_GET_SEQUENCE',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { message: response.error.message },
-    });
-  }
-
-  const result = response.result as LedgerEntriesRpcResult | null | undefined;
-  const entries = result?.entries;
-  if (!Array.isArray(entries)) {
-    console.error('[channels] Sequence fetch failed', {
-      event: 'sequence_rpc_invalid_result_shape',
-      code: 'FAILED_TO_GET_SEQUENCE',
-      address,
-    });
-    throw pluginError('Invalid RPC response for account sequence', {
-      code: 'FAILED_TO_GET_SEQUENCE',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { address },
-    });
-  }
-
-  if (!entries || entries.length === 0) {
-    console.warn('[channels] Sequence fetch returned no account entries', {
-      event: 'sequence_account_not_found',
-      code: 'ACCOUNT_NOT_FOUND',
-      address,
-    });
-    throw pluginError('Channel account not found on ledger', {
-      code: 'ACCOUNT_NOT_FOUND',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { address },
-    });
-  }
-
-  const firstEntryXdr = entries[0]?.xdr;
-  if (typeof firstEntryXdr !== 'string') {
-    console.error('[channels] Sequence fetch failed', {
-      event: 'sequence_rpc_invalid_entry_xdr',
-      code: 'FAILED_TO_GET_SEQUENCE',
-      address,
-    });
-    throw pluginError('Invalid RPC response for account sequence', {
-      code: 'FAILED_TO_GET_SEQUENCE',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { address },
-    });
-  }
-
-  try {
-    const accountEntry = xdr.LedgerEntryData.fromXDR(firstEntryXdr, 'base64');
-    return accountEntry.account().seqNum().toString();
-  } catch (error) {
-    console.error('[channels] Sequence fetch failed', {
-      event: 'sequence_xdr_decode_failed',
-      code: 'FAILED_TO_GET_SEQUENCE',
-      address,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    throw pluginError('Failed to decode account sequence from ledger entry', {
-      code: 'FAILED_TO_GET_SEQUENCE',
-      status: HTTP_STATUS.BAD_GATEWAY,
-      details: { address, message: error instanceof Error ? error.message : String(error) },
-    });
-  }
-}
-
 async function handleXdrSubmit(
   xdrStr: string,
   fundRelayer: Relayer,
@@ -181,6 +59,7 @@ async function handleXdrSubmit(
   network: 'testnet' | 'mainnet',
   networkPassphrase: string,
   api: PluginAPI,
+  kv: PluginKVStore,
   pool: ChannelPool,
   acquireOptions: AcquireOptions,
   fees: InclusionFees,
@@ -210,6 +89,7 @@ async function handleXdrSubmit(
       extracted.func,
       extracted.auth,
       api,
+      kv,
       pool,
       fundRelayer,
       fundAddress,
@@ -236,6 +116,7 @@ async function handleFuncAuthSubmit(
   func: xdr.HostFunction,
   auth: xdr.SorobanAuthorizationEntry[],
   api: PluginAPI,
+  kv: PluginKVStore,
   pool: ChannelPool,
   fundRelayer: Relayer,
   fundAddress: string,
@@ -280,7 +161,7 @@ async function handleFuncAuthSubmit(
       });
     }
 
-    const sequence = await getAccountSequence(channelRelayer, channelInfo.address);
+    const sequence = await getSequence(kv, network, channelRelayer, channelInfo.address);
 
     // Assemble the transaction using the cached simulation result — no second RPC call
     const built = buildWithChannel(
@@ -307,7 +188,26 @@ async function handleFuncAuthSubmit(
       contractId,
       isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
     };
-    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker, submitContext);
+    try {
+      const result = await submitWithFeeBumpAndWait(
+        fundRelayer,
+        signedTx.toXDR(),
+        network,
+        maxFee,
+        api,
+        tracker,
+        submitContext
+      );
+      if (result.status === 'confirmed') {
+        await commitSequence(kv, network, channelInfo.address, sequence);
+      } else {
+        await clearSequence(kv, network, channelInfo.address);
+      }
+      return result;
+    } catch (error: any) {
+      await clearSequence(kv, network, channelInfo.address);
+      throw error;
+    }
   } finally {
     if (poolLock) {
       await pool.release(poolLock);
@@ -396,6 +296,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       config.network,
       networkPassphrase,
       api,
+      kv,
       pool,
       acquireOptions,
       fees,
@@ -412,6 +313,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     request.func,
     request.auth,
     api,
+    kv,
     pool,
     fundRelayer as Relayer,
     fundInfo.address,

@@ -136,7 +136,25 @@ describe('sanitizeReason', () => {
 });
 
 describe('decodeTransactionResult', () => {
-  test('decodes insufficient fee error with fee details', () => {
+  test('extracts result code from relayer status_reason format', () => {
+    const reason = 'Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: TxFailed.';
+    const result = decodeTransactionResult(reason);
+    expect(result).toEqual({ resultCode: 'TxFailed' });
+  });
+
+  test('extracts TxInsufficientFee from relayer status_reason format', () => {
+    const reason = 'Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: TxInsufficientFee.';
+    const result = decodeTransactionResult(reason);
+    expect(result).toEqual({ resultCode: 'TxInsufficientFee' });
+  });
+
+  test('extracts TxFeeBumpInnerFailed from relayer status_reason format', () => {
+    const reason = 'Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: TxFeeBumpInnerFailed.';
+    const result = decodeTransactionResult(reason);
+    expect(result).toEqual({ resultCode: 'TxFeeBumpInnerFailed' });
+  });
+
+  test('decodes insufficient fee error with fee details from trailing XDR format', () => {
     const reason = 'Submission failed: Unexpected error: Transaction submission error: AAAAAAAAliP////3AAAAAA==';
     const result = decodeTransactionResult(reason);
     expect(result).toEqual({
@@ -145,7 +163,7 @@ describe('decodeTransactionResult', () => {
     });
   });
 
-  test('unwraps fee bump inner failure to get actual result code', () => {
+  test('unwraps fee bump inner failure to get actual result code from trailing XDR format', () => {
     const reason =
       'Transaction submission error: AAAAAAAAYtb////z/HtXpj8u7oLTVl/vBKsqKiL79U4NAOI5sWy7pi97rHoAAAAAAAAAAP////sAAAAAAAAAAA==';
     const result = decodeTransactionResult(reason);
