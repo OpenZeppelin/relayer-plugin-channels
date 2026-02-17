@@ -25,10 +25,6 @@ type PoolCapacityDetails = {
   contractId?: string;
   capacityRatio: number;
   maxSpins: number;
-  totalChannels: number;
-  candidateChannels: number;
-  availableCandidates: number;
-  busyCandidates: number;
 };
 
 export class ChannelPool {
@@ -138,27 +134,13 @@ export class ChannelPool {
   }
 
   private async getPoolCapacityDetails(options: AcquireOptions, maxSpins: number): Promise<PoolCapacityDetails> {
-    const allIds = await this.getRelayerIdsFromKV();
     const isLimited = !!(options.contractId && options.limitedContracts.has(options.contractId));
-    const candidateIds = isLimited ? filterChannelsForLimitedContract(allIds, options.capacityRatio) : allIds;
-
-    let busyCandidates = 0;
-    for (const relayerId of candidateIds) {
-      const key = this.lockKey(relayerId);
-      if (await this.kv.exists(key)) {
-        busyCandidates++;
-      }
-    }
 
     return {
       reason: isLimited ? 'limited_contract_capacity' : 'all_channels_busy_or_mutex_contention',
       contractId: options.contractId,
       capacityRatio: options.capacityRatio,
       maxSpins,
-      totalChannels: allIds.length,
-      candidateChannels: candidateIds.length,
-      availableCandidates: Math.max(0, candidateIds.length - busyCandidates),
-      busyCandidates,
     };
   }
 }

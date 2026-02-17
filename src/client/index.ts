@@ -19,5 +19,6 @@ export {
   GetFeeLimitResponse,
   SetFeeLimitResponse,
   DeleteFeeLimitResponse,
+  GetStatsResponse,
 } from './types';
 export { PluginClientError, PluginTransportError, PluginExecutionError, PluginUnexpectedError } from './errors';

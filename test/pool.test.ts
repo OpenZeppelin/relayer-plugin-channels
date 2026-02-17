@@ -26,10 +26,6 @@ describe('ChannelPool', () => {
     expect(err.status).toBe(503);
     expect(err.details).toMatchObject({
       reason: 'all_channels_busy_or_mutex_contention',
-      totalChannels: 2,
-      candidateChannels: 2,
-      busyCandidates: 2,
-      availableCandidates: 0,
     });
 
     // Release one and ensure lock key gone
@@ -63,10 +59,6 @@ describe('ChannelPool', () => {
     expect(err.details).toMatchObject({
       reason: 'limited_contract_capacity',
       contractId: 'C123',
-      totalChannels: 2,
-      candidateChannels: 1,
-      busyCandidates: 1,
-      availableCandidates: 0,
     });
   });
 });

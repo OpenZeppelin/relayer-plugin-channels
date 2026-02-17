@@ -13,7 +13,9 @@
 import type { PluginContext, PluginKVStore } from '@openzeppelin/relayer-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
 import { loadConfig } from './config';
+import type { ChannelAccountsConfig } from './config';
 import { HTTP_STATUS } from './constants';
+import { INCLUSION_FEE_DEFAULT, INCLUSION_FEE_LIMITED } from './fee';
 import { FeeTracker } from './fee-tracking';
 
 export function isManagementRequest(params: any): boolean {
@@ -53,6 +55,8 @@ export async function handleManagement(context: PluginContext): Promise<any> {
       return await setFeeLimit(kv, config.network, m);
     case 'deleteFeeLimit':
       return await deleteFeeLimit(kv, config.network, m);
+    case 'stats':
+      return await getPoolStats(config, kv);
     default:
       throw pluginError('Invalid management action', { code: 'INVALID_ACTION', status: HTTP_STATUS.BAD_REQUEST });
   }
@@ -219,6 +223,54 @@ async function setChannelAccounts(kv: PluginKVStore, network: 'testnet' | 'mainn
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
     });
   }
+}
+
+async function getPoolStats(config: ChannelAccountsConfig, kv: PluginKVStore): Promise<any> {
+  const { network } = config;
+
+  // 1. Get relayer IDs (1 KV call)
+  const key = `${network}:channel:relayer-ids`;
+  let relayerIds: string[];
+  try {
+    const doc: any = await (kv as any).get?.(key);
+    relayerIds = Array.isArray(doc?.relayerIds) ? doc.relayerIds : [];
+  } catch (e: any) {
+    throw pluginError('KV error while reading pool stats', {
+      code: 'KV_ERROR',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+    });
+  }
+
+  // 2. Check all locks in parallel (N KV calls) — best-effort
+  let locked: number | undefined;
+  let available: number | undefined;
+  try {
+    const results = await Promise.all(relayerIds.map((id) => kv.exists(`${network}:channel:in-use:${id}`)));
+    locked = results.filter(Boolean).length;
+    available = relayerIds.length - locked;
+  } catch {
+    // Non-fatal: return pool size without lock info
+  }
+
+  return {
+    pool: {
+      size: relayerIds.length,
+      locked,
+      available,
+    },
+    config: {
+      network,
+      lockTtlSeconds: config.lockTtlSeconds,
+      feeLimit: config.feeLimit,
+      feeResetPeriodSeconds: config.feeResetPeriodMs ? config.feeResetPeriodMs / 1000 : undefined,
+      contractCapacityRatio: config.contractCapacityRatio,
+      limitedContracts: Array.from(config.limitedContracts),
+    },
+    fees: {
+      inclusionFeeDefault: INCLUSION_FEE_DEFAULT,
+      inclusionFeeLimited: INCLUSION_FEE_LIMITED,
+    },
+  };
 }
 
 function normalizeId(id: string): string {

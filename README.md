@@ -320,6 +320,7 @@ export CONTRACT_CAPACITY_RATIO=0.8
 ### Example
 
 With 10 channel accounts and `CONTRACT_CAPACITY_RATIO=0.8`:
+
 - Limited contracts can use up to 8 channels (`floor(10 * 0.8)`)
 - 2 channels are always reserved for non-limited traffic
 - If all 8 limited slots are in use, limited contracts get `POOL_CAPACITY` error while non-limited contracts can still acquire
@@ -509,6 +510,49 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 }
 ```
 
+### Get Pool Stats
+
+Returns pool health metrics, configuration, and fee info.
+
+```bash
+curl -X POST http://localhost:8080/... \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "stats",
+        "adminSecret": "your-secret-here"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "pool": {
+    "size": 5,
+    "locked": 2,
+    "available": 3
+  },
+  "config": {
+    "network": "testnet",
+    "lockTtlSeconds": 30,
+    "feeLimit": 10000,
+    "feeResetPeriodSeconds": 3600,
+    "contractCapacityRatio": 0.8,
+    "limitedContracts": []
+  },
+  "fees": {
+    "inclusionFeeDefault": 203,
+    "inclusionFeeLimited": 201
+  }
+}
+```
+
+> **Note:** If lock checks fail, `locked` and `available` will be `undefined` rather than causing the request to fail. The `size` and config info are always returned.
+
 **Important Notes:**
 
 - You must configure at least one channel account before the plugin can process transactions
@@ -680,6 +724,19 @@ console.log(result.limit); // 500000
 const result = await adminClient.deleteFeeLimit('client-api-key');
 
 console.log(result.ok); // true
+```
+
+#### Get Pool Stats (Management)
+
+```typescript
+// Get pool health metrics (requires adminSecret)
+const stats = await adminClient.getStats();
+
+console.log(stats.pool.size); // total channels
+console.log(stats.pool.locked); // currently in-use
+console.log(stats.pool.available); // size - locked
+console.log(stats.config.network); // 'testnet' or 'mainnet'
+console.log(stats.fees); // inclusion fee values
 ```
 
 ### Error Handling

@@ -214,4 +214,74 @@ describe('management', () => {
 
     await expect(handleManagement(ctx)).rejects.toThrow('Invalid payload: apiKey is required');
   });
+
+  test('stats returns pool size and lock counts', async () => {
+    const kv = new FakeKV();
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['a', 'b', 'c'] });
+    // Lock one channel
+    await kv.set('testnet:channel:in-use:b', { token: 't' });
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'stats' } },
+    } as any as PluginContext;
+
+    const result = await handleManagement(ctx);
+    expect(result.pool).toEqual({ size: 3, locked: 1, available: 2 });
+  });
+
+  test('stats returns empty pool when no relayer IDs', async () => {
+    const kv = new FakeKV();
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'stats' } },
+    } as any as PluginContext;
+
+    const result = await handleManagement(ctx);
+    expect(result.pool).toEqual({ size: 0, locked: 0, available: 0 });
+  });
+
+  test('stats returns undefined locked/available on lock check failure', async () => {
+    const kv = new FakeKV();
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['a', 'b'] });
+    // Make exists throw
+    const origExists = kv.exists.bind(kv);
+    kv.exists = () => {
+      throw new Error('KV unavailable');
+    };
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'stats' } },
+    } as any as PluginContext;
+
+    const result = await handleManagement(ctx);
+    expect(result.pool.size).toBe(2);
+    expect(result.pool.locked).toBeUndefined();
+    expect(result.pool.available).toBeUndefined();
+
+    kv.exists = origExists;
+  });
+
+  test('stats includes config and fees', async () => {
+    process.env.FEE_LIMIT = '10000';
+    process.env.FEE_RESET_PERIOD_SECONDS = '3600';
+    const kv = new FakeKV();
+
+    const ctx = {
+      kv,
+      params: { management: { adminSecret: 'test', action: 'stats' } },
+    } as any as PluginContext;
+
+    const result = await handleManagement(ctx);
+    expect(result.config.network).toBe('testnet');
+    expect(result.config.lockTtlSeconds).toBeTypeOf('number');
+    expect(result.config.feeLimit).toBe(10000);
+    expect(result.config.feeResetPeriodSeconds).toBe(3600);
+    expect(result.config.contractCapacityRatio).toBeTypeOf('number');
+    expect(Array.isArray(result.config.limitedContracts)).toBe(true);
+    expect(result.fees.inclusionFeeDefault).toBeTypeOf('number');
+    expect(result.fees.inclusionFeeLimited).toBeTypeOf('number');
+  });
 });

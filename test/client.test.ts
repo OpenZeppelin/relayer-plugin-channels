@@ -657,6 +657,61 @@ describe('ChannelsClient', () => {
     });
   });
 
+  describe('getStats', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+        adminSecret: 'admin-secret',
+      });
+    });
+
+    test('should return pool stats', async () => {
+      const statsData = {
+        pool: { size: 5, locked: 2, available: 3 },
+        config: {
+          network: 'testnet',
+          lockTtlSeconds: 30,
+          contractCapacityRatio: 0.8,
+          limitedContracts: [],
+        },
+        fees: { inclusionFeeDefault: 203, inclusionFeeLimited: 201 },
+      };
+
+      mockAxiosInstance.post.mockResolvedValue({
+        data: { success: true, data: statsData },
+      });
+
+      const result = await client.getStats();
+      expect(result).toEqual(statsData);
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          management: {
+            action: 'stats',
+            adminSecret: 'admin-secret',
+          },
+        },
+      });
+    });
+
+    test('should throw if adminSecret not configured', async () => {
+      const clientWithoutSecret = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+
+      await expect(clientWithoutSecret.getStats()).rejects.toThrow('adminSecret required for management operations');
+    });
+  });
+
   describe('Error Handling', () => {
     let client: ChannelsClient;
     let mockAxiosInstance: any;

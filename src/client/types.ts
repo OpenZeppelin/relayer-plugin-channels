@@ -170,6 +170,34 @@ export interface DeleteFeeLimitResponse {
 }
 
 /**
+ * Response from getting pool stats
+ */
+export interface GetStatsResponse {
+  pool: {
+    size: number;
+    locked?: number;
+    available?: number;
+  };
+  config: {
+    network: 'testnet' | 'mainnet';
+    lockTtlSeconds: number;
+    feeLimit?: number;
+    feeResetPeriodSeconds?: number;
+    contractCapacityRatio: number;
+    limitedContracts: string[];
+  };
+  fees: {
+    inclusionFeeDefault: number;
+    inclusionFeeLimited: number;
+  };
+  /** Optional metadata (logs and traces) */
+  metadata?: {
+    logs?: LogEntry[];
+    traces?: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+}
+
+/**
  * Plugin response structure for successful operations
  */
 export interface PluginResponseSuccess<T> {
