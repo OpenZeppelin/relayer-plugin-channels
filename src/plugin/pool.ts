@@ -20,6 +20,16 @@ export type AcquireOptions = {
 };
 
 type MembershipDoc = { relayerIds: string[] };
+type PoolCapacityDetails = {
+  reason: 'limited_contract_capacity' | 'all_channels_busy_or_mutex_contention';
+  contractId?: string;
+  capacityRatio: number;
+  maxSpins: number;
+  totalChannels: number;
+  candidateChannels: number;
+  availableCandidates: number;
+  busyCandidates: number;
+};
 
 export class ChannelPool {
   private readonly network: 'testnet' | 'mainnet';
@@ -39,7 +49,6 @@ export class ChannelPool {
   /** Acquire a relayerId with a token lock */
   async acquire(options: AcquireOptions): Promise<PoolLock> {
     const maxSpins = POOL.MUTEX_MAX_SPINS;
-    const isLimited = options.contractId && options.limitedContracts.has(options.contractId);
 
     for (let i = 0; i < maxSpins; i++) {
       const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer(options));
@@ -52,15 +61,13 @@ export class ChannelPool {
       return r;
     }
 
-    if (isLimited) {
-      console.log(
-        `[channels] Contract ${options.contractId} limited to ${Math.round(options.capacityRatio * 100)}% capacity - no channels available`
-      );
-    }
+    const diagnostics = await this.getPoolCapacityDetails(options, maxSpins);
+    console.warn('[channels] Pool capacity exhausted', diagnostics);
 
     throw pluginError('Too many transactions queued. Please try again later', {
       code: 'POOL_CAPACITY',
       status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+      details: diagnostics,
     });
   }
 
@@ -128,6 +135,31 @@ export class ChannelPool {
     } catch {
       return [];
     }
+  }
+
+  private async getPoolCapacityDetails(options: AcquireOptions, maxSpins: number): Promise<PoolCapacityDetails> {
+    const allIds = await this.getRelayerIdsFromKV();
+    const isLimited = !!(options.contractId && options.limitedContracts.has(options.contractId));
+    const candidateIds = isLimited ? filterChannelsForLimitedContract(allIds, options.capacityRatio) : allIds;
+
+    let busyCandidates = 0;
+    for (const relayerId of candidateIds) {
+      const key = this.lockKey(relayerId);
+      if (await this.kv.exists(key)) {
+        busyCandidates++;
+      }
+    }
+
+    return {
+      reason: isLimited ? 'limited_contract_capacity' : 'all_channels_busy_or_mutex_contention',
+      contractId: options.contractId,
+      capacityRatio: options.capacityRatio,
+      maxSpins,
+      totalChannels: allIds.length,
+      candidateChannels: candidateIds.length,
+      availableCandidates: Math.max(0, candidateIds.length - busyCandidates),
+      busyCandidates,
+    };
   }
 }
 

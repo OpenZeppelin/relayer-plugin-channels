@@ -51,23 +51,62 @@ export function extractFuncAuthFromUnsignedXdr(
   };
 }
 
-async function getAccountSequence(relayer: Relayer, address: string): Promise<string> {
-  const accountKey = xdr.LedgerKey.account(
-    new xdr.LedgerKeyAccount({
-      accountId: Keypair.fromPublicKey(address).xdrPublicKey(),
-    })
-  );
+type LedgerEntryRpcItem = { xdr?: unknown };
+type LedgerEntriesRpcResult = { entries?: LedgerEntryRpcItem[] };
 
-  const response = await relayer.rpc({
-    jsonrpc: '2.0',
-    id: Math.floor(Math.random() * 1e8).toString(),
-    method: 'getLedgerEntries',
-    params: {
-      keys: [accountKey.toXDR('base64')],
-    },
-  });
+export async function getAccountSequence(relayer: Relayer, address: string): Promise<string> {
+  let accountKey: xdr.LedgerKey;
+  try {
+    accountKey = xdr.LedgerKey.account(
+      new xdr.LedgerKeyAccount({
+        accountId: Keypair.fromPublicKey(address).xdrPublicKey(),
+      })
+    );
+  } catch (error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'invalid_channel_account_address',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw pluginError('Invalid channel account address', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address, message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+
+  let response;
+  try {
+    response = await relayer.rpc({
+      jsonrpc: '2.0',
+      id: Math.floor(Math.random() * 1e8).toString(),
+      method: 'getLedgerEntries',
+      params: {
+        keys: [accountKey.toXDR('base64')],
+      },
+    });
+  } catch (error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_request_failed',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw pluginError('Failed to get sequence from channel relayer', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: error instanceof Error ? error.message : String(error) },
+    });
+  }
 
   if (response.error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_error_response',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: response.error.message,
+    });
     throw pluginError('Failed to get sequence from channel relayer', {
       code: 'FAILED_TO_GET_SEQUENCE',
       status: HTTP_STATUS.BAD_GATEWAY,
@@ -75,8 +114,27 @@ async function getAccountSequence(relayer: Relayer, address: string): Promise<st
     });
   }
 
-  const entries = (response.result as any).entries;
+  const result = response.result as LedgerEntriesRpcResult | null | undefined;
+  const entries = result?.entries;
+  if (!Array.isArray(entries)) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_invalid_result_shape',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+    });
+    throw pluginError('Invalid RPC response for account sequence', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address },
+    });
+  }
+
   if (!entries || entries.length === 0) {
+    console.warn('[channels] Sequence fetch returned no account entries', {
+      event: 'sequence_account_not_found',
+      code: 'ACCOUNT_NOT_FOUND',
+      address,
+    });
     throw pluginError('Channel account not found on ledger', {
       code: 'ACCOUNT_NOT_FOUND',
       status: HTTP_STATUS.BAD_GATEWAY,
@@ -84,8 +142,36 @@ async function getAccountSequence(relayer: Relayer, address: string): Promise<st
     });
   }
 
-  const accountEntry = xdr.LedgerEntryData.fromXDR(entries[0].xdr, 'base64');
-  return accountEntry.account().seqNum().toString();
+  const firstEntryXdr = entries[0]?.xdr;
+  if (typeof firstEntryXdr !== 'string') {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_rpc_invalid_entry_xdr',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+    });
+    throw pluginError('Invalid RPC response for account sequence', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address },
+    });
+  }
+
+  try {
+    const accountEntry = xdr.LedgerEntryData.fromXDR(firstEntryXdr, 'base64');
+    return accountEntry.account().seqNum().toString();
+  } catch (error) {
+    console.error('[channels] Sequence fetch failed', {
+      event: 'sequence_xdr_decode_failed',
+      code: 'FAILED_TO_GET_SEQUENCE',
+      address,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw pluginError('Failed to decode account sequence from ledger entry', {
+      code: 'FAILED_TO_GET_SEQUENCE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { address, message: error instanceof Error ? error.message : String(error) },
+    });
+  }
 }
 
 async function handleXdrSubmit(
