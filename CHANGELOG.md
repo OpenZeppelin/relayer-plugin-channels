@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.10.0
+
+### Minor Changes
+
+- 2d3da9f: feat: Directly fetch channel sequence number
+
 ## 0.9.0
 
 ### Minor Changes
