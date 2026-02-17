@@ -12,11 +12,11 @@ import { loadConfig, getNetworkPassphrase } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
-import { signWithChannelAndFund, submitWithFeeBumpAndWait } from './submit';
+import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from './submit';
 import { HTTP_STATUS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
-import { calculateMaxFee, getContractIdFromFunc } from './fee';
+import { calculateMaxFee, getContractIdFromFunc, getContractIdFromTransaction } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 
@@ -97,9 +97,14 @@ async function handleXdrSubmit(
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
+  const contractId = getContractIdFromTransaction(validated);
   const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts);
   await tracker?.checkBudget(maxFee);
-  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker);
+  const submitContext: SubmitContext = {
+    contractId,
+    isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
+  };
+  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker, submitContext);
 }
 
 async function handleFuncAuthSubmit(
@@ -168,9 +173,14 @@ async function handleFuncAuthSubmit(
       networkPassphrase
     );
 
+    const contractId = getContractIdFromFunc(func);
     const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts);
     await tracker?.checkBudget(maxFee);
-    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker);
+    const submitContext: SubmitContext = {
+      contractId,
+      isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
+    };
+    return await submitWithFeeBumpAndWait(fundRelayer, signedTx.toXDR(), network, maxFee, api, tracker, submitContext);
   } finally {
     if (poolLock) {
       await pool.release(poolLock);

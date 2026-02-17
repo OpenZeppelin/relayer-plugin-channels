@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { parseSimulationError } from '../src/plugin/simulation';
-import { sanitizeReason } from '../src/plugin/submit';
+import { sanitizeReason, decodeTransactionResult } from '../src/plugin/submit';
 
 describe('parseSimulationError', () => {
   test('extracts message and error type from data array', () => {
@@ -132,5 +132,36 @@ describe('sanitizeReason', () => {
     // Edge case: actual error contains colon
     const reason = 'Error: Invalid format: expected JSON';
     expect(sanitizeReason(reason)).toBe('expected JSON');
+  });
+});
+
+describe('decodeTransactionResult', () => {
+  test('decodes insufficient fee error with fee details', () => {
+    const reason = 'Submission failed: Unexpected error: Transaction submission error: AAAAAAAAliP////3AAAAAA==';
+    const result = decodeTransactionResult(reason);
+    expect(result).toEqual({
+      feeCharged: 38435,
+      resultCode: 'txInsufficientFee',
+    });
+  });
+
+  test('unwraps fee bump inner failure to get actual result code', () => {
+    const reason =
+      'Transaction submission error: AAAAAAAAYtb////z/HtXpj8u7oLTVl/vBKsqKiL79U4NAOI5sWy7pi97rHoAAAAAAAAAAP////sAAAAAAAAAAA==';
+    const result = decodeTransactionResult(reason);
+    expect(result).not.toBeNull();
+    expect(result!.resultCode).toBe('txBadSeq');
+  });
+
+  test('returns null for reason without XDR', () => {
+    expect(decodeTransactionResult('Transaction failed')).toBeNull();
+  });
+
+  test('returns null for reason with invalid base64', () => {
+    expect(decodeTransactionResult('Error: not-valid-xdr===')).toBeNull();
+  });
+
+  test('returns null for empty string', () => {
+    expect(decodeTransactionResult('')).toBeNull();
   });
 });
