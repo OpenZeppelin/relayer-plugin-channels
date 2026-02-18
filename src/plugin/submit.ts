@@ -105,10 +105,12 @@ export async function submitWithFeeBumpAndWait(
       const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
       const contractType = context?.isLimited ? 'limited' : 'default';
       const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
-      if (decoded?.resultCode === 'txInsufficientFee') {
-        console.error(
-          `${base}, reason=txInsufficientFee, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
-        );
+      if (decoded && isTxInsufficientFeeError(decoded.resultCode)) {
+        const feeInfo =
+          decoded.feeCharged != null
+            ? `, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
+            : '';
+        console.error(`${base}, reason=txInsufficientFee${feeInfo}`);
       } else if (decoded) {
         console.error(`${base}, reason=${decoded.resultCode}`);
       } else {
@@ -210,15 +212,18 @@ function extractResultCodeFromReasonText(reason: string): string | null {
   return innerMatch?.[1] ? `${outerMatch[1]}:${innerMatch[1]}` : outerMatch[1];
 }
 
+/** Check if the result code indicates an insufficient fee error (case-insensitive). */
+function isTxInsufficientFeeError(resultCode: string | undefined): boolean {
+  return resultCode?.toLowerCase() === 'txinsufficientfee';
+}
+
 export function buildStellarLabTransactionUrl(network: 'testnet' | 'mainnet', txHash: string): string {
   const isMainnet = network === 'mainnet';
   const networkId = isMainnet ? 'mainnet' : 'testnet';
   const label = isMainnet ? 'Mainnet' : 'Testnet';
   const horizonUrl = isMainnet ? 'https://horizon.stellar.org' : 'https://horizon-testnet.stellar.org';
   const rpcUrl = isMainnet ? 'https://mainnet.sorobanrpc.com' : 'https://soroban-testnet.stellar.org';
-  const passphrase = isMainnet
-    ? 'Public Global Stellar Network ; September 2015'
-    : 'Test SDF Network ; September 2015';
+  const passphrase = isMainnet ? 'Public Global Stellar Network ; September 2015' : 'Test SDF Network ; September 2015';
 
   // Stellar Lab expects protocol values encoded as https://// in query params.
   // txHash is intentionally left unencoded because it is a hex string.

@@ -121,4 +121,25 @@ describe('config', () => {
     process.env.CONTRACT_CAPACITY_RATIO = 'invalid';
     expect(loadConfig().contractCapacityRatio).toBe(0.8);
   });
+
+  test('sequence number cache max age', () => {
+    delete process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
+    expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(120_000); // default
+
+    process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = '60000';
+    expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(60000);
+
+    process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = '500.9';
+    expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(500); // floors to integer
+
+    // Invalid values fall back to default
+    process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = '0';
+    expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(120_000);
+
+    process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = '-100';
+    expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(120_000);
+
+    process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = 'invalid';
+    expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(120_000);
+  });
 });
