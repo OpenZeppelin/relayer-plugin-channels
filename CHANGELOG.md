@@ -1,5 +1,12 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.11.0
+
+### Minor Changes
+
+- 4360bb5: feat: Enforce soroban auth simulation & Improve inner failure details
+  feat: Introduce sequence number cache
+
 ## 0.10.0
 
 ### Minor Changes
