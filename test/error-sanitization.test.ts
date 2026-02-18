@@ -142,7 +142,6 @@ describe('decodeTransactionResult', () => {
     expect(result).toMatchObject({
       feeCharged: 38435,
       resultCode: 'txInsufficientFee',
-      outerResultCode: 'txInsufficientFee',
     });
   });
 
@@ -151,9 +150,7 @@ describe('decodeTransactionResult', () => {
       'Transaction submission error: AAAAAAAAYtb////z/HtXpj8u7oLTVl/vBKsqKiL79U4NAOI5sWy7pi97rHoAAAAAAAAAAP////sAAAAAAAAAAA==';
     const result = decodeTransactionResult(reason);
     expect(result).not.toBeNull();
-    expect(result!.resultCode).toBe('txBadSeq');
-    expect(result!.outerResultCode).toBe('txFeeBumpInnerFailed');
-    expect(result!.innerResultCode).toBe('txBadSeq');
+    expect(result!.resultCode).toBe('txFeeBumpInnerFailed:txBadSeq');
   });
 
   test('returns null for reason without XDR', () => {

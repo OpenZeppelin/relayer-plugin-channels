@@ -207,7 +207,7 @@ describe('simulateTransaction', () => {
       await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
       throw new Error('Expected simulateTransaction to throw');
     } catch (err: any) {
-      expect(err.code).toBe('SIGNED_AUTH_VALIDATION_FAILED');
+      expect(err.code).toBe('SIMULATION_SIGNED_AUTH_VALIDATION_FAILED');
       expect(String(err.message)).toContain('Signed auth entry validation failed in enforce simulation');
       expect(String(err.message)).toContain('signature has expired (Auth, InvalidInput)');
     }

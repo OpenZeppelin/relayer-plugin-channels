@@ -24,8 +24,6 @@ export interface SubmitContext {
 interface DecodedTransactionResult {
   feeCharged: number;
   resultCode: string;
-  outerResultCode?: string;
-  innerResultCode?: string;
 }
 
 /**
@@ -111,10 +109,6 @@ export async function submitWithFeeBumpAndWait(
         console.error(
           `${base}, reason=txInsufficientFee, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
         );
-      } else if (decoded?.outerResultCode === 'txFeeBumpInnerFailed') {
-        console.error(
-          `${base}, reason=txFeeBumpInnerFailed, inner_result=${decoded.innerResultCode ?? 'unknown'}`
-        );
       } else if (decoded) {
         console.error(`${base}, reason=${decoded.resultCode}`);
       } else {
@@ -130,9 +124,8 @@ export async function submitWithFeeBumpAndWait(
           reason,
           id: final.id,
           hash: final.hash ?? null,
-          outerResultCode: decoded?.outerResultCode ?? null,
-          innerResultCode: decoded?.innerResultCode ?? null,
-          labUrl,
+          resultCode: decoded?.resultCode ?? null,
+          labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
         },
       });
     }
@@ -178,16 +171,15 @@ export function decodeTransactionResult(reason: string): DecodedTransactionResul
     const match = reason.match(/([A-Za-z0-9+/=]{20,})$/);
     if (!match) return null;
     const result = xdr.TransactionResult.fromXDR(match[1], 'base64');
-    const outerResultCode = result.result().switch().name;
+    const outerResultCode = String(result.result().switch().name);
     let resultCode = outerResultCode;
-    let innerResultCode: string | undefined;
 
     // Unwrap fee bump inner failure to get the actual result code
     if (outerResultCode === 'txFeeBumpInnerFailed') {
       try {
         const innerResult = result.result().innerResultPair().result();
-        innerResultCode = innerResult.result().switch().name;
-        resultCode = innerResult.result().switch().name;
+        const innerResultCode = String(innerResult.result().switch().name);
+        resultCode = `${outerResultCode}:${innerResultCode}`;
       } catch {
         // keep outer result code if unwrap fails
       }
@@ -196,8 +188,6 @@ export function decodeTransactionResult(reason: string): DecodedTransactionResul
     return {
       feeCharged: Number(result.feeCharged().toBigInt()),
       resultCode,
-      outerResultCode,
-      innerResultCode,
     };
   } catch {
     return null;
@@ -214,6 +204,8 @@ export function buildStellarLabTransactionUrl(network: 'testnet' | 'mainnet', tx
     ? 'Public Global Stellar Network ; September 2015'
     : 'Test SDF Network ; September 2015';
 
+  // Stellar Lab expects protocol values encoded as https://// in query params.
+  // txHash is intentionally left unencoded because it is a hex string.
   const horizonParam = horizonUrl.replace('https://', 'https:////');
   const rpcParam = rpcUrl.replace('https://', 'https:////');
   const passphraseParam = passphrase.replace(/ /g, '%20').replace(/;/g, '%3B');

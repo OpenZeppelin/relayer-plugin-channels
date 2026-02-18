@@ -68,7 +68,7 @@ export async function simulateTransaction(
       id: Math.floor(Math.random() * 1e8).toString(),
       method: 'simulateTransaction',
       // Enforce mode validates auth entry signatures during simulation.
-      params: { transaction: transaction.toXDR(), authMode: SIMULATION.AUTH_MODE },
+      params: { transaction: transaction.toXDR(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   } catch (err: any) {
     throw pluginError('Simulation network request failed', {
@@ -100,7 +100,7 @@ export async function simulateTransaction(
     throw pluginError(failure.message, {
       code: failure.code,
       status: HTTP_STATUS.BAD_REQUEST,
-      details: { error: parsedError, authMode: SIMULATION.AUTH_MODE },
+      details: { error: parsedError, authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   }
 
@@ -202,16 +202,20 @@ export function parseSimulationError(error: string): string {
 
 function classifySimulationFailure(rawError: string, parsedError: string): SimulationFailure {
   const isEnforcedAuthValidation =
-    SIMULATION.AUTH_MODE === 'enforce' &&
+    SIMULATION.SIMULATION_AUTH_MODE === 'enforce' &&
     (/\bError\(Auth,/i.test(rawError) ||
       /\brequire_auth\b/i.test(rawError) ||
-      /\bsignature\b/i.test(rawError) ||
+      /\binvalid\s+signature\b/i.test(rawError) ||
+      /\bsignature\s+has\s+expired\b/i.test(rawError) ||
+      /\bsignature\s+expired\b/i.test(rawError) ||
+      /\bsignature\s+verification\s+failed\b/i.test(rawError) ||
+      /\bbad[_\s]?signature\b/i.test(rawError) ||
       /\btx_bad_auth\b/i.test(rawError) ||
       /\bbad[_\s]?auth\b/i.test(rawError));
 
   if (isEnforcedAuthValidation) {
     return {
-      code: 'SIGNED_AUTH_VALIDATION_FAILED',
+      code: 'SIMULATION_SIGNED_AUTH_VALIDATION_FAILED',
       message: `Signed auth entry validation failed in enforce simulation: ${parsedError}`,
     };
   }
