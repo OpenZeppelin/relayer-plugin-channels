@@ -27,6 +27,11 @@ export interface SimulationResult {
   rawSimResult: rpc.Api.RawSimulateTransactionResponse;
 }
 
+interface SimulationFailure {
+  code: string;
+  message: string;
+}
+
 /**
  * Simulate a transaction to obtain the full simulation response and detect
  * whether the call is read-only.
@@ -62,7 +67,8 @@ export async function simulateTransaction(
       jsonrpc: '2.0',
       id: Math.floor(Math.random() * 1e8).toString(),
       method: 'simulateTransaction',
-      params: { transaction: transaction.toXDR() },
+      // Enforce mode validates auth entry signatures during simulation.
+      params: { transaction: transaction.toXDR(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   } catch (err: any) {
     throw pluginError('Simulation network request failed', {
@@ -88,11 +94,13 @@ export async function simulateTransaction(
   } as rpc.Api.RawSimulateTransactionResponse;
 
   if ('error' in simResult && simResult.error) {
+    const parsedError = parseSimulationError(simResult.error);
+    const failure = classifySimulationFailure(simResult.error, parsedError);
     console.error(`[channels] Simulation error: ${simResult.error}`);
-    throw pluginError('Simulation failed', {
-      code: 'SIMULATION_FAILED',
+    throw pluginError(failure.message, {
+      code: failure.code,
       status: HTTP_STATUS.BAD_REQUEST,
-      details: { error: parseSimulationError(simResult.error) },
+      details: { error: parsedError, authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   }
 
@@ -190,4 +198,30 @@ export function parseSimulationError(error: string): string {
   }
 
   return firstLine;
+}
+
+function classifySimulationFailure(rawError: string, parsedError: string): SimulationFailure {
+  const isEnforcedAuthValidation =
+    SIMULATION.SIMULATION_AUTH_MODE === 'enforce' &&
+    (/\bError\(Auth,/i.test(rawError) ||
+      /\brequire_auth\b/i.test(rawError) ||
+      /\binvalid\s+signature\b/i.test(rawError) ||
+      /\bsignature\s+has\s+expired\b/i.test(rawError) ||
+      /\bsignature\s+expired\b/i.test(rawError) ||
+      /\bsignature\s+verification\s+failed\b/i.test(rawError) ||
+      /\bbad[_\s]?signature\b/i.test(rawError) ||
+      /\btx_bad_auth\b/i.test(rawError) ||
+      /\bbad[_\s]?auth\b/i.test(rawError));
+
+  if (isEnforcedAuthValidation) {
+    return {
+      code: 'SIMULATION_SIGNED_AUTH_VALIDATION_FAILED',
+      message: `Signed auth entry validation failed in enforce simulation: ${parsedError}`,
+    };
+  }
+
+  return {
+    code: 'SIMULATION_FAILED',
+    message: 'Simulation failed',
+  };
 }

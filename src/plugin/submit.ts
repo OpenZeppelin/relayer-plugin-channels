@@ -21,6 +21,11 @@ export interface SubmitContext {
   isLimited?: boolean;
 }
 
+interface DecodedTransactionResult {
+  feeCharged: number;
+  resultCode: string;
+}
+
 /**
  * Sign transaction with both channel and fund relayers
  * - First sign with channel account
@@ -97,6 +102,7 @@ export async function submitWithFeeBumpAndWait(
       }
       const rawReason = final.status_reason || 'Transaction failed';
       const decoded = decodeTransactionResult(rawReason);
+      const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
       const contractType = context?.isLimited ? 'limited' : 'default';
       const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
       if (decoded?.resultCode === 'txInsufficientFee') {
@@ -109,7 +115,8 @@ export async function submitWithFeeBumpAndWait(
         console.error(`${base}, reason=${rawReason}`);
       }
       const reason = sanitizeReason(rawReason);
-      throw pluginError(reason, {
+      const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
+      throw pluginError(reasonWithLab, {
         code: 'ONCHAIN_FAILED',
         status: HTTP_STATUS.BAD_REQUEST,
         details: {
@@ -117,6 +124,8 @@ export async function submitWithFeeBumpAndWait(
           reason,
           id: final.id,
           hash: final.hash ?? null,
+          resultCode: decoded?.resultCode ?? null,
+          labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
         },
       });
     }
@@ -157,18 +166,28 @@ function isSignTransactionResponseStellar(data: unknown): data is SignTransactio
 }
 
 /** Try to decode a transaction result XDR from the reason string */
-export function decodeTransactionResult(reason: string): { feeCharged: number; resultCode: string } | null {
+export function decodeTransactionResult(reason: string): DecodedTransactionResult | null {
+  const fromReasonText = extractResultCodeFromReasonText(reason);
+  if (fromReasonText) {
+    return {
+      feeCharged: 0,
+      resultCode: fromReasonText,
+    };
+  }
+
   try {
     const match = reason.match(/([A-Za-z0-9+/=]{20,})$/);
     if (!match) return null;
     const result = xdr.TransactionResult.fromXDR(match[1], 'base64');
-    let resultCode = result.result().switch().name;
+    const outerResultCode = String(result.result().switch().name);
+    let resultCode = outerResultCode;
 
     // Unwrap fee bump inner failure to get the actual result code
-    if (resultCode === 'txFeeBumpInnerFailed') {
+    if (outerResultCode === 'txFeeBumpInnerFailed') {
       try {
         const innerResult = result.result().innerResultPair().result();
-        resultCode = innerResult.result().switch().name;
+        const innerResultCode = String(innerResult.result().switch().name);
+        resultCode = `${outerResultCode}:${innerResultCode}`;
       } catch {
         // keep outer result code if unwrap fails
       }
@@ -181,6 +200,33 @@ export function decodeTransactionResult(reason: string): { feeCharged: number; r
   } catch {
     return null;
   }
+}
+
+function extractResultCodeFromReasonText(reason: string): string | null {
+  const outerMatch = reason.match(/\bSpecific XDR reason:\s*([A-Za-z0-9_]+)\b/i);
+  if (!outerMatch?.[1]) return null;
+
+  const innerMatch = reason.match(/\bInner result:\s*([A-Za-z0-9_]+)\b/i);
+  return innerMatch?.[1] ? `${outerMatch[1]}:${innerMatch[1]}` : outerMatch[1];
+}
+
+export function buildStellarLabTransactionUrl(network: 'testnet' | 'mainnet', txHash: string): string {
+  const isMainnet = network === 'mainnet';
+  const networkId = isMainnet ? 'mainnet' : 'testnet';
+  const label = isMainnet ? 'Mainnet' : 'Testnet';
+  const horizonUrl = isMainnet ? 'https://horizon.stellar.org' : 'https://horizon-testnet.stellar.org';
+  const rpcUrl = isMainnet ? 'https://mainnet.sorobanrpc.com' : 'https://soroban-testnet.stellar.org';
+  const passphrase = isMainnet
+    ? 'Public Global Stellar Network ; September 2015'
+    : 'Test SDF Network ; September 2015';
+
+  // Stellar Lab expects protocol values encoded as https://// in query params.
+  // txHash is intentionally left unencoded because it is a hex string.
+  const horizonParam = horizonUrl.replace('https://', 'https:////');
+  const rpcParam = rpcUrl.replace('https://', 'https:////');
+  const passphraseParam = passphrase.replace(/ /g, '%20').replace(/;/g, '%3B');
+
+  return `https://lab.stellar.org/transaction/dashboard?$=network$id=${networkId}&label=${label}&horizonUrl=${horizonParam}&rpcUrl=${rpcParam}&passphrase=${passphraseParam}&txDashboard$transactionHash=${txHash};;`;
 }
 
 /** Strip provider wrapper text, extract last segment (e.g., "TxInsufficientBalance") */
