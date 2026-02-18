@@ -4,8 +4,8 @@
 
 ### Minor Changes
 
-- 4360bb5: feat: Enforce soroban auth simulation & Improve inner failure details
-  feat: Introduce sequence number cache
+- c9d2bf3: feat: Enforce soroban auth simulation & Improve inner failure details
+- a76577e: feat: Introduce sequence number cache
 
 ## 0.10.0
 
