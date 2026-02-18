@@ -167,6 +167,14 @@ function isSignTransactionResponseStellar(data: unknown): data is SignTransactio
 
 /** Try to decode a transaction result XDR from the reason string */
 export function decodeTransactionResult(reason: string): DecodedTransactionResult | null {
+  const fromReasonText = extractResultCodeFromReasonText(reason);
+  if (fromReasonText) {
+    return {
+      feeCharged: 0,
+      resultCode: fromReasonText,
+    };
+  }
+
   try {
     const match = reason.match(/([A-Za-z0-9+/=]{20,})$/);
     if (!match) return null;
@@ -192,6 +200,14 @@ export function decodeTransactionResult(reason: string): DecodedTransactionResul
   } catch {
     return null;
   }
+}
+
+function extractResultCodeFromReasonText(reason: string): string | null {
+  const outerMatch = reason.match(/\bSpecific XDR reason:\s*([A-Za-z0-9_]+)\b/i);
+  if (!outerMatch?.[1]) return null;
+
+  const innerMatch = reason.match(/\bInner result:\s*([A-Za-z0-9_]+)\b/i);
+  return innerMatch?.[1] ? `${outerMatch[1]}:${innerMatch[1]}` : outerMatch[1];
 }
 
 export function buildStellarLabTransactionUrl(network: 'testnet' | 'mainnet', txHash: string): string {

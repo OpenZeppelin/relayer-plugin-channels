@@ -153,6 +153,21 @@ describe('decodeTransactionResult', () => {
     expect(result!.resultCode).toBe('txFeeBumpInnerFailed:txBadSeq');
   });
 
+  test('extracts result code from relayer status text with inner result', () => {
+    const reason =
+      'Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: TxFeeBumpInnerFailed. Inner result: TxFailed.';
+    const result = decodeTransactionResult(reason);
+    expect(result).not.toBeNull();
+    expect(result!.resultCode).toBe('TxFeeBumpInnerFailed:TxFailed');
+  });
+
+  test('extracts outer result code from relayer status text without inner result', () => {
+    const reason = 'Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: TxInsufficientFee.';
+    const result = decodeTransactionResult(reason);
+    expect(result).not.toBeNull();
+    expect(result!.resultCode).toBe('TxInsufficientFee');
+  });
+
   test('returns null for reason without XDR', () => {
     expect(decodeTransactionResult('Transaction failed')).toBeNull();
   });
