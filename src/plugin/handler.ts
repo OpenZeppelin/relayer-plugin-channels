@@ -21,6 +21,20 @@ import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 import { getSequence, commitSequence, clearSequence } from './sequence';
 
+interface PipelineContext {
+  api: PluginAPI;
+  kv: PluginKVStore;
+  pool: ChannelPool;
+  fundRelayer: Relayer;
+  fundAddress: string;
+  network: 'testnet' | 'mainnet';
+  networkPassphrase: string;
+  acquireOptions: AcquireOptions;
+  fees: InclusionFees;
+  tracker: FeeTracker | undefined;
+  sequenceNumberCacheMaxAgeMs: number;
+}
+
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
   const values = headers[headerName];
   return values?.[0]?.trim() || undefined;
@@ -52,20 +66,8 @@ export function extractFuncAuthFromUnsignedXdr(
   };
 }
 
-async function handleXdrSubmit(
-  xdrStr: string,
-  fundRelayer: Relayer,
-  fundAddress: string,
-  network: 'testnet' | 'mainnet',
-  networkPassphrase: string,
-  api: PluginAPI,
-  kv: PluginKVStore,
-  pool: ChannelPool,
-  acquireOptions: AcquireOptions,
-  fees: InclusionFees,
-  tracker?: FeeTracker
-): Promise<ChannelAccountsResponse> {
-  const tx = new Transaction(xdrStr, networkPassphrase);
+async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<ChannelAccountsResponse> {
+  const tx = new Transaction(xdrStr, ctx.networkPassphrase);
 
   // Unsigned XDR: extract func+auth and route through channel path
   if (tx.signatures.length === 0) {
@@ -84,50 +86,36 @@ async function handleXdrSubmit(
     console.log(`[channels] Unsigned XDR detected, extracting func+auth and routing through channel path`);
     // Update acquireOptions with contractId from extracted func
     const contractId = getContractIdFromFunc(extracted.func);
-    const updatedOptions: AcquireOptions = { ...acquireOptions, contractId };
-    return handleFuncAuthSubmit(
-      extracted.func,
-      extracted.auth,
-      api,
-      kv,
-      pool,
-      fundRelayer,
-      fundAddress,
-      network,
-      networkPassphrase,
-      updatedOptions,
-      fees,
-      tracker
-    );
+    const updatedOptions: AcquireOptions = { ...ctx.acquireOptions, contractId };
+    return handleFuncAuthSubmit(extracted.func, extracted.auth, { ...ctx, acquireOptions: updatedOptions });
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
-  const maxFee = calculateMaxFee(validated, acquireOptions.limitedContracts, fees);
+  const maxFee = calculateMaxFee(validated, ctx.acquireOptions.limitedContracts, ctx.fees);
   const contractId = getContractIdFromTransaction(validated);
-  await tracker?.checkBudget(maxFee);
+  await ctx.tracker?.checkBudget(maxFee);
   const submitContext: SubmitContext = {
     contractId,
-    isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
+    isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
   };
-  return submitWithFeeBumpAndWait(fundRelayer, validated.toXDR(), network, maxFee, api, tracker, submitContext);
+  return submitWithFeeBumpAndWait(
+    ctx.fundRelayer,
+    validated.toXDR(),
+    ctx.network,
+    maxFee,
+    ctx.api,
+    ctx.tracker,
+    submitContext
+  );
 }
 
 async function handleFuncAuthSubmit(
   func: xdr.HostFunction,
   auth: xdr.SorobanAuthorizationEntry[],
-  api: PluginAPI,
-  kv: PluginKVStore,
-  pool: ChannelPool,
-  fundRelayer: Relayer,
-  fundAddress: string,
-  network: 'testnet' | 'mainnet',
-  networkPassphrase: string,
-  acquireOptions: AcquireOptions,
-  fees: InclusionFees,
-  tracker?: FeeTracker
+  ctx: PipelineContext
 ): Promise<ChannelAccountsResponse> {
   // Simulate once — used for both read-only detection and transaction assembly
-  const simulation = await simulateTransaction(func, auth, fundAddress, fundRelayer, networkPassphrase);
+  const simulation = await simulateTransaction(func, auth, ctx.fundAddress, ctx.fundRelayer, ctx.networkPassphrase);
 
   if (simulation.isReadOnly) {
     console.log(`[channels] Read-only call detected, returning simulation result`);
@@ -142,8 +130,8 @@ async function handleFuncAuthSubmit(
 
   let poolLock: PoolLock | undefined;
   try {
-    poolLock = await pool.acquire(acquireOptions);
-    const channelRelayer = api.useRelayer(poolLock.relayerId);
+    poolLock = await ctx.pool.acquire(ctx.acquireOptions);
+    const channelRelayer = ctx.api.useRelayer(poolLock.relayerId);
     const channelInfo = await channelRelayer.getRelayer();
     console.log(`[channels] Acquired channel: ${poolLock.relayerId}`);
     if (!channelInfo || !channelInfo.address) {
@@ -161,56 +149,62 @@ async function handleFuncAuthSubmit(
       });
     }
 
-    const sequence = await getSequence(kv, network, channelRelayer, channelInfo.address);
+    const sequence = await getSequence(
+      ctx.kv,
+      ctx.network,
+      channelRelayer,
+      channelInfo.address,
+      ctx.sequenceNumberCacheMaxAgeMs
+    );
 
     // Assemble the transaction using the cached simulation result — no second RPC call
     const built = buildWithChannel(
       func,
       auth,
       { address: channelInfo.address, sequence },
-      networkPassphrase,
+      ctx.networkPassphrase,
       simulation.rawSimResult
     );
 
     const signedTx = await signWithChannelAndFund(
       built,
       channelRelayer,
-      fundRelayer,
+      ctx.fundRelayer,
       channelInfo.address,
-      fundAddress,
-      networkPassphrase
+      ctx.fundAddress,
+      ctx.networkPassphrase
     );
 
-    const maxFee = calculateMaxFee(signedTx, acquireOptions.limitedContracts, fees);
+    const maxFee = calculateMaxFee(signedTx, ctx.acquireOptions.limitedContracts, ctx.fees);
     const contractId = getContractIdFromFunc(func);
-    await tracker?.checkBudget(maxFee);
+    await ctx.tracker?.checkBudget(maxFee);
     const submitContext: SubmitContext = {
       contractId,
-      isLimited: contractId ? acquireOptions.limitedContracts.has(contractId) : false,
+      isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
     };
     try {
       const result = await submitWithFeeBumpAndWait(
-        fundRelayer,
+        ctx.fundRelayer,
         signedTx.toXDR(),
-        network,
+        ctx.network,
         maxFee,
-        api,
-        tracker,
+        ctx.api,
+        ctx.tracker,
         submitContext
       );
       if (result.status === 'confirmed') {
-        await commitSequence(kv, network, channelInfo.address, sequence);
+        await commitSequence(ctx.kv, ctx.network, channelInfo.address, sequence);
       } else {
-        await clearSequence(kv, network, channelInfo.address);
+        await clearSequence(ctx.kv, ctx.network, channelInfo.address);
       }
       return result;
     } catch (error: any) {
-      await clearSequence(kv, network, channelInfo.address);
+      await clearSequence(ctx.kv, ctx.network, channelInfo.address);
       throw error;
     }
   } finally {
     if (poolLock) {
-      await pool.release(poolLock);
+      await ctx.pool.release(poolLock);
     }
   }
 }
@@ -286,22 +280,25 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     inclusionFeeLimited: config.inclusionFeeLimited,
   };
 
-  // 4. Branch by request type
+  // 4. Build pipeline context
+  const ctx: PipelineContext = {
+    api,
+    kv,
+    pool,
+    fundRelayer: fundRelayer as Relayer,
+    fundAddress: fundInfo.address,
+    network: config.network,
+    networkPassphrase,
+    acquireOptions,
+    fees,
+    tracker,
+    sequenceNumberCacheMaxAgeMs: config.sequenceNumberCacheMaxAgeMs,
+  };
+
+  // 5. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
-    return await handleXdrSubmit(
-      request.xdr,
-      fundRelayer as Relayer,
-      fundInfo.address,
-      config.network,
-      networkPassphrase,
-      api,
-      kv,
-      pool,
-      acquireOptions,
-      fees,
-      tracker
-    );
+    return await handleXdrSubmit(request.xdr, ctx);
   }
 
   // Extract contractId for func+auth flow
@@ -309,20 +306,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   const funcAcquireOptions: AcquireOptions = { ...acquireOptions, contractId };
 
   console.log(`[channels] Flow: func+auth with channel account`);
-  return await handleFuncAuthSubmit(
-    request.func,
-    request.auth,
-    api,
-    kv,
-    pool,
-    fundRelayer as Relayer,
-    fundInfo.address,
-    config.network,
-    networkPassphrase,
-    funcAcquireOptions,
-    fees,
-    tracker
-  );
+  return await handleFuncAuthSubmit(request.func, request.auth, { ...ctx, acquireOptions: funcAcquireOptions });
 }
 
 /**

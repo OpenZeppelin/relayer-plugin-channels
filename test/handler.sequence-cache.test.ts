@@ -17,6 +17,7 @@ vi.mock('../src/plugin/config', () => ({
     contractCapacityRatio: 0.8,
     inclusionFeeDefault: 203,
     inclusionFeeLimited: 201,
+    sequenceNumberCacheMaxAgeMs: 120_000,
   }),
   getNetworkPassphrase: () => 'Test SDF Network ; September 2015',
 }));
@@ -184,7 +185,7 @@ describe('handler sequence cache lifecycle', () => {
     const result = await handler(ctx);
 
     expect(result.status).toBe('confirmed');
-    expect(getSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', expect.anything(), CHANNEL_ADDRESS);
+    expect(getSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', expect.anything(), CHANNEL_ADDRESS, expect.any(Number));
     expect(commitSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS, '42');
     expect(clearSequenceSpy).not.toHaveBeenCalled();
   });

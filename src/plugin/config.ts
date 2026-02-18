@@ -24,6 +24,7 @@ export interface ChannelAccountsConfig {
   contractCapacityRatio: number;
   inclusionFeeDefault: number;
   inclusionFeeLimited: number;
+  sequenceNumberCacheMaxAgeMs: number;
 }
 
 function requireEnv(name: string): string {
@@ -106,6 +107,13 @@ function parseInclusionFee(envVar: string, defaultValue: number): number {
   return Math.floor(n);
 }
 
+function parseSequenceNumberCacheMaxAge(): number {
+  const raw = process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
+  if (!raw) return CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
+}
+
 function parseContractCapacityRatio(): number {
   const raw = process.env.CONTRACT_CAPACITY_RATIO;
   if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
@@ -140,6 +148,7 @@ export function loadConfig(): ChannelAccountsConfig {
     contractCapacityRatio: parseContractCapacityRatio(),
     inclusionFeeDefault: parseInclusionFee('INCLUSION_FEE_DEFAULT', DEFAULT_INCLUSION_FEE_DEFAULT),
     inclusionFeeLimited: parseInclusionFee('INCLUSION_FEE_LIMITED', DEFAULT_INCLUSION_FEE_LIMITED),
+    sequenceNumberCacheMaxAgeMs: parseSequenceNumberCacheMaxAge(),
   };
 }
 

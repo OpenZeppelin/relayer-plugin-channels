@@ -15,9 +15,6 @@ import { HTTP_STATUS } from './constants';
 type LedgerEntryRpcItem = { xdr?: unknown };
 type LedgerEntriesRpcResult = { entries?: LedgerEntryRpcItem[] };
 
-/** Max age (ms) before cached sequence is considered stale and re-fetched from chain. */
-const SEQ_CACHE_MAX_AGE_MS = 120_000;
-
 interface SeqCacheEntry {
   sequence: string;
   storedAt: number;
@@ -159,14 +156,15 @@ export async function getSequence(
   kv: PluginKVStore,
   network: string,
   relayer: Relayer,
-  address: string
+  address: string,
+  sequenceNumberCacheMaxAgeMs: number
 ): Promise<string> {
   const key = seqKey(network, address);
   try {
     const cached = await kv.get<SeqCacheEntry>(key);
     if (cached?.sequence) {
       const age = Date.now() - (cached.storedAt ?? 0);
-      if (age < SEQ_CACHE_MAX_AGE_MS) {
+      if (age < sequenceNumberCacheMaxAgeMs) {
         console.debug(`[channels] Sequence cache hit: address=${address}, seq=${cached.sequence}, age=${age}ms`);
         return cached.sequence;
       }

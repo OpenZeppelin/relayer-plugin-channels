@@ -2,9 +2,11 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { xdr } from '@stellar/stellar-sdk';
 import { getSequence, commitSequence, clearSequence } from '../src/plugin/sequence';
 import { FakeKV } from './helpers/fakeKV';
+import { CONFIG } from '../src/plugin/constants';
 import type { Relayer } from '@openzeppelin/relayer-sdk';
 
 const NETWORK = 'testnet';
+const CACHE_MAX_AGE = CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
 const ADDRESS = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 const KV_KEY = `${NETWORK}:channel:seq:${ADDRESS}`;
 
@@ -36,13 +38,13 @@ describe('sequence cache', () => {
     test('returns cached sequence from KV when fresh', async () => {
       await kv.set(KV_KEY, { sequence: '200', storedAt: Date.now() });
       const relayer = {} as Relayer;
-      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS);
+      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
       expect(seq).toBe('200');
     });
 
     test('falls back to chain on KV miss', async () => {
       const relayer = mockRelayerWithSequence('100');
-      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS);
+      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
       expect(seq).toBe('100');
       expect(relayer.rpc).toHaveBeenCalled();
     });
@@ -51,7 +53,7 @@ describe('sequence cache', () => {
       // storedAt 3 minutes ago — older than 2 min threshold
       await kv.set(KV_KEY, { sequence: '200', storedAt: Date.now() - 180_000 });
       const relayer = mockRelayerWithSequence('250');
-      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS);
+      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
       expect(seq).toBe('250');
       expect(relayer.rpc).toHaveBeenCalled();
     });
@@ -60,7 +62,7 @@ describe('sequence cache', () => {
       // Entry without storedAt (e.g. written by older code)
       await kv.set(KV_KEY, { sequence: '200' });
       const relayer = mockRelayerWithSequence('250');
-      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS);
+      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
       expect(seq).toBe('250');
       expect(relayer.rpc).toHaveBeenCalled();
     });
@@ -73,7 +75,7 @@ describe('sequence cache', () => {
       } as unknown as FakeKV;
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const relayer = mockRelayerWithSequence('300');
-      const seq = await getSequence(brokenKv, NETWORK, relayer, ADDRESS);
+      const seq = await getSequence(brokenKv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
       expect(seq).toBe('300');
       expect(relayer.rpc).toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalled();
