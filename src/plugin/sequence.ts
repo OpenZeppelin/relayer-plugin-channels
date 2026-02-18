@@ -25,6 +25,14 @@ function seqKey(network: string, address: string): string {
 }
 
 /**
+ * Validates that a sequence number string is a non-negative integer.
+ * Returns true for strings like "0", "42", "123456789012345".
+ */
+function isValidSequence(seq: string): boolean {
+  return /^\d+$/.test(seq);
+}
+
+/**
  * Fetch the current sequence number for an account directly from chain
  * via `getLedgerEntries` RPC. Throws on any RPC or decoding failure.
  */
@@ -163,12 +171,16 @@ export async function getSequence(
   try {
     const cached = await kv.get<SeqCacheEntry>(key);
     if (cached?.sequence) {
-      const age = Date.now() - (cached.storedAt ?? 0);
-      if (age < sequenceNumberCacheMaxAgeMs) {
-        console.debug(`[channels] Sequence cache hit: address=${address}, seq=${cached.sequence}, age=${age}ms`);
-        return cached.sequence;
+      if (!isValidSequence(cached.sequence)) {
+        console.warn(`[channels] Sequence cache invalid: address=${address}, value=${cached.sequence}, refetching`);
+      } else {
+        const age = Date.now() - (cached.storedAt ?? 0);
+        if (age < sequenceNumberCacheMaxAgeMs) {
+          console.debug(`[channels] Sequence cache hit: address=${address}, seq=${cached.sequence}, age=${age}ms`);
+          return cached.sequence;
+        }
+        console.debug(`[channels] Sequence cache stale: address=${address}, age=${age}ms, refetching`);
       }
-      console.debug(`[channels] Sequence cache stale: address=${address}, age=${age}ms, refetching`);
     }
   } catch (err) {
     console.warn(`[channels] Failed to read sequence from KV, falling back to chain`, {

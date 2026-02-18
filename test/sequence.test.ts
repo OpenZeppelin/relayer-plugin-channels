@@ -67,6 +67,27 @@ describe('sequence cache', () => {
       expect(relayer.rpc).toHaveBeenCalled();
     });
 
+    test('falls back to chain when cached sequence is not numeric', async () => {
+      await kv.set(KV_KEY, { sequence: 'not-a-number', storedAt: Date.now() });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const relayer = mockRelayerWithSequence('300');
+      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
+      expect(seq).toBe('300');
+      expect(relayer.rpc).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Sequence cache invalid'));
+      warnSpy.mockRestore();
+    });
+
+    test('falls back to chain when cached sequence contains non-digit characters', async () => {
+      await kv.set(KV_KEY, { sequence: '123abc', storedAt: Date.now() });
+      const relayer = mockRelayerWithSequence('400');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const seq = await getSequence(kv, NETWORK, relayer, ADDRESS, CACHE_MAX_AGE);
+      expect(seq).toBe('400');
+      expect(relayer.rpc).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
     test('falls back to chain when kv.get throws', async () => {
       const brokenKv = {
         get: vi.fn().mockRejectedValue(new Error('KV read error')),
