@@ -309,10 +309,6 @@ describe('buildWithChannel', () => {
     });
   }
 
-  function buildAuthEntryWithExpiry(expiryLedger: number): string {
-    return buildAuthEntryXdr(expiryLedger).toXDR('base64');
-  }
-
   test('rejects when auth signatureExpirationLedger is below minSignatureExpirationLedgerBuffer', async () => {
     const latestLedger = 10000;
     // expiry = 10001 → margin = 1, default buffer = 2 → should reject
