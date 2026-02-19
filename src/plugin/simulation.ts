@@ -142,8 +142,15 @@ export function buildWithChannel(
   auth: xdr.SorobanAuthorizationEntry[] | undefined,
   channel: ChannelAccount,
   networkPassphrase: string,
-  simResult: rpc.Api.RawSimulateTransactionResponse
+  simResult: rpc.Api.RawSimulateTransactionResponse,
+  minSignatureExpirationLedgerBuffer: number = SIMULATION.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER
 ): Transaction {
+  // Fail fast: reject auth entries whose signatureExpirationLedger is too close
+  // to latestLedger before doing any assembly work.
+  if (simResult.latestLedger) {
+    validateAuthExpiry(auth, simResult.latestLedger, minSignatureExpirationLedgerBuffer);
+  }
+
   const now = Math.floor(Date.now() / 1000);
   console.debug(
     `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${auth?.length ?? 0}`
@@ -182,6 +189,49 @@ export function buildWithChannel(
     });
   }
 }
+
+/**
+ * Reject transactions where any address-credentialed auth entry has a
+ * signatureExpirationLedger too close to the current ledger.  This catches
+ * tight expiries early instead of failing on-chain with "signature has expired".
+ */
+function validateAuthExpiry(
+  authEntries: xdr.SorobanAuthorizationEntry[] | undefined,
+  latestLedger: number,
+  minBuffer: number
+): void {
+  if (!authEntries?.length) return;
+
+  for (const entry of authEntries) {
+    const creds = entry.credentials();
+    if (creds.switch() !== xdr.SorobanCredentialsType.sorobanCredentialsAddress()) {
+      continue;
+    }
+
+    const expiry = creds.address().signatureExpirationLedger();
+    const margin = expiry - latestLedger;
+
+    if (margin < minBuffer) {
+      console.error(
+        `[channels] Auth entry signatureExpirationLedger too close to current ledger (expires in ${margin} ledgers, minimum ${minBuffer} required)`
+      );
+      throw pluginError(
+        `Auth entry signatureExpirationLedger too close to current ledger (expires in ${margin} ledgers, minimum ${minBuffer} required)`,
+        {
+          code: 'AUTH_EXPIRY_TOO_SHORT',
+          status: HTTP_STATUS.BAD_REQUEST,
+          details: {
+            signatureExpirationLedger: expiry,
+            latestLedger,
+            margin,
+            minimumRequired: minBuffer,
+          },
+        }
+      );
+    }
+  }
+}
+
 /** Extract human-readable message + error type from simulation error diagnostic events */
 export function parseSimulationError(error: string): string {
   const firstLine = error.split('\n')[0]?.trim() || 'Simulation failed';

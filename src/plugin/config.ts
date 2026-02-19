@@ -25,6 +25,7 @@ export interface ChannelAccountsConfig {
   inclusionFeeDefault: number;
   inclusionFeeLimited: number;
   sequenceNumberCacheMaxAgeMs: number;
+  minSignatureExpirationLedgerBuffer: number;
 }
 
 function requireEnv(name: string): string {
@@ -107,6 +108,13 @@ function parseInclusionFee(envVar: string, defaultValue: number): number {
   return Math.floor(n);
 }
 
+function parseMinAuthExpiryLedgerBuffer(): number {
+  const raw = process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+  if (!raw) return CONFIG.DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : CONFIG.DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+}
+
 function parseSequenceNumberCacheMaxAge(): number {
   const raw = process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
   if (!raw) return CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
@@ -149,6 +157,7 @@ export function loadConfig(): ChannelAccountsConfig {
     inclusionFeeDefault: parseInclusionFee('INCLUSION_FEE_DEFAULT', DEFAULT_INCLUSION_FEE_DEFAULT),
     inclusionFeeLimited: parseInclusionFee('INCLUSION_FEE_LIMITED', DEFAULT_INCLUSION_FEE_LIMITED),
     sequenceNumberCacheMaxAgeMs: parseSequenceNumberCacheMaxAge(),
+    minSignatureExpirationLedgerBuffer: parseMinAuthExpiryLedgerBuffer(),
   };
 }
 
