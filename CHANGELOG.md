@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.12.0
+
+### Minor Changes
+
+- 76184fa: feat: Validate auth entry signature expiration ledger
+
 ## 0.11.0
 
 ### Minor Changes
