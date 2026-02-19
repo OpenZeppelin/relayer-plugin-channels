@@ -24,6 +24,7 @@ export const CONFIG = {
   MAX_LOCK_TTL_SECONDS: 30,
   DEFAULT_CONTRACT_CAPACITY_RATIO: 0.8,
   DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS: 120_000,
+  DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
 } as const;
 
 // Pool Constants
@@ -48,6 +49,8 @@ export const SIMULATION = {
   MAX_TIME_BOUND_OFFSET_SECONDS: 120,
   MAX_FUTURE_TIME_BOUND_SECONDS: 120,
   SIMULATION_AUTH_MODE: 'enforce',
+  /** Minimum ledger margin required between latestLedger and auth signatureExpirationLedger. Must be > 1 since simulation already validates 1 ledger of validity. ~10s at ~5s/ledger. */
+  MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
 } as const;
 
 // Polling for transactionWait

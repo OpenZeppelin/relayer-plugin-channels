@@ -233,6 +233,12 @@ export CONTRACT_CAPACITY_RATIO=0.8        # Max ratio of pool for limited contra
 # Inclusion fee overrides (optional)
 export INCLUSION_FEE_DEFAULT=203           # Inclusion fee in stroops for regular contracts (default: BASE_FEE * 2 + 3 = 203)
 export INCLUSION_FEE_LIMITED=201           # Inclusion fee in stroops for limited contracts (default: BASE_FEE * 2 + 1 = 201)
+
+# Sequence number cache (optional)
+export SEQUENCE_NUMBER_CACHE_MAX_AGE_MS=120000  # Max age of cached sequence numbers in ms (default: 120000)
+
+# Auth expiry validation (optional)
+export MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER=2  # Minimum ledger margin for auth entry signatureExpirationLedger (default: 2)
 ```
 
 Your Relayer should now contain:
@@ -940,25 +946,67 @@ Plugin error example:
 - **Key**: `<network>:api-key-limit:<apiKey>`
 - **Value**: `{ limit: number }` (custom fee limit in stroops)
 
+### Sequence Number Cache
+
+- **Key**: `<network>:channel:seq:<address>`
+- **Value**: `{ sequence: string, storedAt: number }` (sequence number and cache timestamp in ms)
+
 ## Error Codes
 
+### Configuration
+
 - `CONFIG_MISSING`: Missing required environment variable
+- `CONFIG_INVALID`: Invalid configuration value (e.g., invalid contract address in `LIMITED_CONTRACTS`)
 - `UNSUPPORTED_NETWORK`: Invalid network type
+
+### Request Validation
+
 - `INVALID_PARAMS`: Invalid request parameters
 - `INVALID_XDR`: Failed to parse XDR
 - `INVALID_ENVELOPE_TYPE`: Not a regular transaction envelope
+- `INVALID_UNSIGNED_XDR`: Unsigned XDR must contain exactly one `invokeHostFunction` operation
 - `INVALID_TIME_BOUNDS`: TimeBounds too far in the future
+- `TIMEBOUNDS_EXPIRED`: Transaction timebounds have expired
+- `TIMEBOUNDS_TOO_FAR`: Transaction timebounds maxTime too far in the future
+- `FEE_MISMATCH`: Fee mismatch in signed transaction
+- `INVALID_OPERATION_SOURCE`: Operation source does not match transaction source
+
+### Pool & Channel
+
 - `NO_CHANNELS_CONFIGURED`: No channel accounts have been configured via management API
 - `POOL_CAPACITY`: All channel accounts in use
 - `RELAYER_UNAVAILABLE`: Relayer not found
+- `FAILED_TO_GET_SEQUENCE`: Failed to fetch channel account sequence number
+- `ACCOUNT_NOT_FOUND`: Channel account not found on the ledger
+
+### Simulation & Assembly
+
 - `SIMULATION_FAILED`: Transaction simulation failed
+- `SIMULATION_NETWORK_ERROR`: Simulation network request failed (HTTP 502)
+- `SIMULATION_RPC_FAILURE`: Simulation RPC provider error (HTTP 502)
+- `SIMULATION_SIGNED_AUTH_VALIDATION_FAILED`: Signed auth entry validation failed in enforce-mode simulation
+- `AUTH_EXPIRY_TOO_SHORT`: Auth entry `signatureExpirationLedger` too close to current ledger
+- `ASSEMBLY_FAILED`: Transaction assembly failed
+
+### Submission
+
+- `INVALID_SIGNATURE`: Invalid channel signature response
 - `ONCHAIN_FAILED`: Transaction failed on-chain
 - `WAIT_TIMEOUT`: Transaction wait timeout
+
+### Fee Tracking
+
+- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured
+- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
+
+### Management
+
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
+- `INVALID_ACTION`: Invalid management action
+- `INVALID_PAYLOAD`: Invalid management request payload
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
-- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured (HTTP 403)
-- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
+- `KV_ERROR`: KV store operation failed
 
 ## License
 

@@ -142,4 +142,25 @@ describe('config', () => {
     process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = 'invalid';
     expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(120_000);
   });
+
+  test('min auth expiry ledger buffer', () => {
+    delete process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2); // default
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '5';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(5);
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '3.7';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(3); // floors to integer
+
+    // Invalid values fall back to default
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '0';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '-1';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = 'invalid';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+  });
 });

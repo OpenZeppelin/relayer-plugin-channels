@@ -8,7 +8,7 @@
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 import type { PluginAPI, PluginKVStore, Relayer } from '@openzeppelin/relayer-sdk';
 import { PoolLock, ChannelPool, AcquireOptions } from './pool';
-import { loadConfig, getNetworkPassphrase } from './config';
+import { loadConfig, getNetworkPassphrase, type ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
@@ -32,7 +32,7 @@ interface PipelineContext {
   acquireOptions: AcquireOptions;
   fees: InclusionFees;
   tracker: FeeTracker | undefined;
-  sequenceNumberCacheMaxAgeMs: number;
+  config: ChannelAccountsConfig;
 }
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
@@ -154,7 +154,7 @@ async function handleFuncAuthSubmit(
       ctx.network,
       channelRelayer,
       channelInfo.address,
-      ctx.sequenceNumberCacheMaxAgeMs
+      ctx.config.sequenceNumberCacheMaxAgeMs
     );
 
     // Assemble the transaction using the cached simulation result — no second RPC call
@@ -163,7 +163,8 @@ async function handleFuncAuthSubmit(
       auth,
       { address: channelInfo.address, sequence },
       ctx.networkPassphrase,
-      simulation.rawSimResult
+      simulation.rawSimResult,
+      ctx.config.minSignatureExpirationLedgerBuffer
     );
 
     const signedTx = await signWithChannelAndFund(
@@ -292,7 +293,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     acquireOptions,
     fees,
     tracker,
-    sequenceNumberCacheMaxAgeMs: config.sequenceNumberCacheMaxAgeMs,
+    config,
   };
 
   // 5. Branch by request type
