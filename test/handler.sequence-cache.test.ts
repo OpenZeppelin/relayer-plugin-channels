@@ -22,11 +22,17 @@ vi.mock('../src/plugin/config', () => ({
   getNetworkPassphrase: () => 'Test SDF Network ; September 2015',
 }));
 
-// Mock pool to immediately return a channel
+// Mock pool to immediately return a channel — shared spies for assertions
+const poolSpies = {
+  acquire: vi.fn().mockResolvedValue({ relayerId: 'channel-1', token: 'tok' }),
+  release: vi.fn().mockResolvedValue(undefined),
+  extendLock: vi.fn().mockResolvedValue(undefined),
+};
 vi.mock('../src/plugin/pool', () => {
   class MockChannelPool {
-    acquire = vi.fn().mockResolvedValue({ relayerId: 'channel-1', token: 'tok' });
-    release = vi.fn().mockResolvedValue(undefined);
+    acquire = poolSpies.acquire;
+    release = poolSpies.release;
+    extendLock = poolSpies.extendLock;
   }
   return { ChannelPool: MockChannelPool };
 });
@@ -237,5 +243,43 @@ describe('handler sequence cache lifecycle', () => {
 
     expect(commitSequenceSpy).not.toHaveBeenCalled();
     expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
+  });
+
+  test('extends lock and skips release on WAIT_TIMEOUT', async () => {
+    const err = new Error('timeout') as any;
+    err.code = 'WAIT_TIMEOUT';
+    mockSubmit.mockRejectedValue(err);
+
+    const ctx = makeContext(kv);
+    await expect(handler(ctx)).rejects.toMatchObject({ code: 'WAIT_TIMEOUT' });
+
+    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    expect(poolSpies.release).not.toHaveBeenCalled();
+  });
+
+  test('releases lock normally on non-timeout errors', async () => {
+    const err = new Error('TxFailed') as any;
+    err.code = 'ONCHAIN_FAILED';
+    mockSubmit.mockRejectedValue(err);
+
+    const ctx = makeContext(kv);
+    await expect(handler(ctx)).rejects.toMatchObject({ code: 'ONCHAIN_FAILED' });
+
+    expect(poolSpies.extendLock).not.toHaveBeenCalled();
+    expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+  });
+
+  test('releases lock normally on success', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'confirmed',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    expect(poolSpies.extendLock).not.toHaveBeenCalled();
+    expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
   });
 });

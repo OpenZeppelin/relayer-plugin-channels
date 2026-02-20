@@ -201,6 +201,10 @@ async function handleFuncAuthSubmit(
       return result;
     } catch (error: any) {
       await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+      if (error.code === 'WAIT_TIMEOUT' && poolLock) {
+        await ctx.pool.extendLock(poolLock);
+        poolLock = undefined; // skip release in finally
+      }
       throw error;
     }
   } finally {
