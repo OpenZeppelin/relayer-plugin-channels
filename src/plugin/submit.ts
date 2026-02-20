@@ -104,7 +104,10 @@ export async function submitWithFeeBumpAndWait(
       const decoded = decodeTransactionResult(rawReason);
       const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
       const contractType = context?.isLimited ? 'limited' : 'default';
-      const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
+      const base =
+        contractType === 'limited'
+          ? `[channels] Transaction failed for limited contract: contractId=${context?.contractId ?? 'unknown'}, maxFee=${maxFee}`
+          : `[channels] Transaction failed for non-limited contract: maxFee=${maxFee}`;
       if (decoded && isTxInsufficientFeeError(decoded.resultCode)) {
         const feeInfo =
           decoded.feeCharged != null
@@ -148,6 +151,7 @@ export async function submitWithFeeBumpAndWait(
       throw error;
     }
 
+    console.error(`[channels] Transaction wait timeout: ${error instanceof Error ? error.message : String(error)}`);
     // Otherwise, it's a timeout - don't track fees (status unknown)
     throw pluginError('Transaction wait timeout. It may still submit.', {
       code: 'WAIT_TIMEOUT',

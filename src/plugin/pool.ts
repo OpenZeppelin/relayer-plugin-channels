@@ -58,7 +58,11 @@ export class ChannelPool {
     }
 
     const diagnostics = await this.getPoolCapacityDetails(options, maxSpins);
-    console.warn('[channels] Pool capacity exhausted', diagnostics);
+    if (diagnostics.reason === 'limited_contract_capacity') {
+      console.error(`[channels] Pool capacity exhausted for limited contract`);
+    } else {
+      console.error(`[channels] Pool capacity exhausted for non-limited contract`);
+    }
 
     throw pluginError('Too many transactions queued. Please try again later', {
       code: 'POOL_CAPACITY',

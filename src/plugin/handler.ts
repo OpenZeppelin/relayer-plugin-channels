@@ -135,6 +135,7 @@ async function handleFuncAuthSubmit(
     const channelInfo = await channelRelayer.getRelayer();
     console.log(`[channels] Acquired channel: ${poolLock.relayerId}`);
     if (!channelInfo || !channelInfo.address) {
+      console.error(`[channels] Channel relayer not found: ${poolLock.relayerId}`);
       throw pluginError('Channel relayer not found', {
         code: 'RELAYER_UNAVAILABLE',
         status: HTTP_STATUS.BAD_GATEWAY,
@@ -142,6 +143,7 @@ async function handleFuncAuthSubmit(
       });
     }
     if (channelInfo.network_type !== 'stellar') {
+      console.error(`[channels] Channel relayer network type must be stellar: ${channelInfo.network_type}`);
       throw pluginError('Channel relayer network type must be stellar', {
         code: 'UNSUPPORTED_NETWORK',
         status: HTTP_STATUS.BAD_REQUEST,

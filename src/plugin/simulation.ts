@@ -71,6 +71,7 @@ export async function simulateTransaction(
       params: { transaction: transaction.toXDR(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   } catch (err: any) {
+    console.error(`[channels] Simulation network request failed: ${err instanceof Error ? err.message : String(err)}`);
     throw pluginError('Simulation network request failed', {
       code: 'SIMULATION_NETWORK_ERROR',
       status: HTTP_STATUS.BAD_GATEWAY,
