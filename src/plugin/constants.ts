@@ -39,15 +39,15 @@ export const POOL = {
 
 // Time Constants
 export const TIME = {
-  MAX_TIME_BOUND_OFFSET_SECONDS: 120,
+  MAX_TIME_BOUND_OFFSET_SECONDS: 60,
 } as const;
 
 // Simulation-related defaults
 export const SIMULATION = {
   DEFAULT_FEE: '100',
   MIN_TIME_BOUND: 0,
-  MAX_TIME_BOUND_OFFSET_SECONDS: 120,
-  MAX_FUTURE_TIME_BOUND_SECONDS: 120,
+  MAX_TIME_BOUND_OFFSET_SECONDS: 60,
+  MAX_FUTURE_TIME_BOUND_SECONDS: 60,
   SIMULATION_AUTH_MODE: 'enforce',
   /** Minimum ledger margin required between latestLedger and auth signatureExpirationLedger. Must be > 1 since simulation already validates 1 ledger of validity. ~10s at ~5s/ledger. */
   MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
