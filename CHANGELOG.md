@@ -1,5 +1,12 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.13.0
+
+### Minor Changes
+
+- 19ea8b3: feat: Extend lock on timeout
+- 3bdf6da: Extend channel lock time in case of timeouts
+
 ## 0.12.0
 
 ### Minor Changes
