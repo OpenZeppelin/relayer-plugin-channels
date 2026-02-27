@@ -12,8 +12,8 @@
 import type { xdr } from '@stellar/stellar-sdk';
 
 export type ChannelAccountsRequest =
-  | { type: 'xdr'; xdr: string }
-  | { type: 'func-auth'; func: xdr.HostFunction; auth: xdr.SorobanAuthorizationEntry[] };
+  | { type: 'xdr'; xdr: string; returnTxHash?: boolean }
+  | { type: 'func-auth'; func: xdr.HostFunction; auth: xdr.SorobanAuthorizationEntry[]; returnTxHash?: boolean };
 
 /**
  * Plugin response format aligned with launchtube
@@ -26,6 +26,12 @@ export interface ChannelAccountsResponse {
   returnValue?: string;
   /** Present only for read-only calls: the latest ledger at simulation time */
   latestLedger?: number;
+  /** Present when returnTxHash is set and the transaction failed on-chain */
+  error?: {
+    reason?: string;
+    resultCode?: string | null;
+    labUrl?: string | null;
+  };
 }
 
 /**

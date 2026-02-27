@@ -31,7 +31,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
     }
 
     // Strict: cannot include func/auth when using xdr
-    const unknown = keys.filter((k) => !['xdr'].includes(k));
+    const unknown = keys.filter((k) => !['xdr', 'returnTxHash'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`xdr` request must not include other parameters', {
         code: 'INVALID_PARAMS',
@@ -40,7 +40,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'xdr', xdr: params.xdr.trim() };
+    return { type: 'xdr', xdr: params.xdr.trim(), returnTxHash: params.returnTxHash === true };
   }
 
   // Mode: func+auth
@@ -84,7 +84,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       }
     }
 
-    return { type: 'func-auth', func, auth };
+    return { type: 'func-auth', func, auth, returnTxHash: params.returnTxHash === true };
   }
 
   throw pluginError('Must pass either `xdr` or `func` and `auth`', {
