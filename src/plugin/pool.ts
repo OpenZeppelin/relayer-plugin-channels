@@ -106,7 +106,11 @@ export class ChannelPool {
       const key = this.lockKey(lock.relayerId);
       const current = await this.kv.get<{ token?: string }>(key);
       if (current?.token === lock.token) {
-        await this.kv.set(key, { ...current, lockedAt: new Date().toISOString() }, { ttlSec: ttlSec ?? this.channelLockTtlSec });
+        await this.kv.set(
+          key,
+          { ...current, lockedAt: new Date().toISOString() },
+          { ttlSec: ttlSec ?? this.channelLockTtlSec }
+        );
       }
     } catch {
       // ignore extend errors — lock will expire via TTL

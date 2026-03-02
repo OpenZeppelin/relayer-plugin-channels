@@ -33,6 +33,7 @@ interface PipelineContext {
   fees: InclusionFees;
   tracker: FeeTracker | undefined;
   config: ChannelAccountsConfig;
+  startTime: number;
 }
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
@@ -66,7 +67,11 @@ export function extractFuncAuthFromUnsignedXdr(
   };
 }
 
-async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<ChannelAccountsResponse> {
+async function handleXdrSubmit(
+  xdrStr: string,
+  ctx: PipelineContext,
+  skipWait?: boolean
+): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, ctx.networkPassphrase);
 
   // Unsigned XDR: extract func+auth and route through channel path
@@ -87,7 +92,7 @@ async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<Ch
     // Update acquireOptions with contractId from extracted func
     const contractId = getContractIdFromFunc(extracted.func);
     const updatedOptions: AcquireOptions = { ...ctx.acquireOptions, contractId };
-    return handleFuncAuthSubmit(extracted.func, extracted.auth, { ...ctx, acquireOptions: updatedOptions });
+    return handleFuncAuthSubmit(extracted.func, extracted.auth, { ...ctx, acquireOptions: updatedOptions }, skipWait);
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
@@ -104,15 +109,18 @@ async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<Ch
     ctx.network,
     maxFee,
     ctx.api,
+    ctx.startTime,
     ctx.tracker,
-    submitContext
+    submitContext,
+    skipWait
   );
 }
 
 async function handleFuncAuthSubmit(
   func: xdr.HostFunction,
   auth: xdr.SorobanAuthorizationEntry[],
-  ctx: PipelineContext
+  ctx: PipelineContext,
+  skipWait?: boolean
 ): Promise<ChannelAccountsResponse> {
   // Simulate once — used for both read-only detection and transaction assembly
   const simulation = await simulateTransaction(func, auth, ctx.fundAddress, ctx.fundRelayer, ctx.networkPassphrase);
@@ -190,10 +198,18 @@ async function handleFuncAuthSubmit(
         ctx.network,
         maxFee,
         ctx.api,
+        ctx.startTime,
         ctx.tracker,
-        submitContext
+        submitContext,
+        skipWait
       );
-      if (result.status === 'confirmed') {
+      if (result.status === 'pending' || result.status === 'sent' || result.status === 'submitted') {
+        // extend lock and clear sequence
+        console.log(`[channels] skipWait: extending lock and clearing sequence`);
+        await ctx.pool.extendLock(poolLock!);
+        await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+        poolLock = undefined; // skip release in finally
+      } else if (result.status === 'confirmed') {
         await commitSequence(ctx.kv, ctx.network, channelInfo.address, sequence);
       } else {
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
@@ -216,6 +232,7 @@ async function handleFuncAuthSubmit(
 }
 
 async function channelAccounts(context: PluginContext): Promise<ChannelAccountsResponse> {
+  const startTime = Date.now();
   const { api, kv, params, headers } = context;
 
   // Management branch: handle and return immediately
@@ -259,6 +276,18 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
 
   // 2. Get fund relayer
   const fundRelayer = api.useRelayer(config.fundRelayerId);
+
+  // 2a. Handle get-transaction early — no pool, channel, or simulation needed
+  if (request.type === 'get-transaction') {
+    const res = await (fundRelayer as Relayer).getTransaction({ transactionId: request.transactionId });
+    const stellar = res as { id: string; status: string; hash?: string };
+    return {
+      transactionId: stellar.id,
+      status: stellar.status,
+      hash: stellar.hash ?? null,
+    };
+  }
+
   const fundInfo = await fundRelayer.getRelayer();
   if (!fundInfo || !fundInfo.address) {
     throw pluginError('Fund relayer not found', {
@@ -299,12 +328,13 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     fees,
     tracker,
     config,
+    startTime,
   };
 
   // 5. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
-    return await handleXdrSubmit(request.xdr, ctx);
+    return await handleXdrSubmit(request.xdr, ctx, request.skipWait);
   }
 
   // Extract contractId for func+auth flow
@@ -312,7 +342,12 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   const funcAcquireOptions: AcquireOptions = { ...acquireOptions, contractId };
 
   console.log(`[channels] Flow: func+auth with channel account`);
-  return await handleFuncAuthSubmit(request.func, request.auth, { ...ctx, acquireOptions: funcAcquireOptions });
+  return await handleFuncAuthSubmit(
+    request.func,
+    request.auth,
+    { ...ctx, acquireOptions: funcAcquireOptions },
+    request.skipWait
+  );
 }
 
 /**
