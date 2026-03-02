@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.14.0
+
+### Minor Changes
+
+- 2519475: Introduce skipWait and getTransaction features
+
 ## 0.13.0
 
 ### Minor Changes
