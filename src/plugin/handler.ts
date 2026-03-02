@@ -33,6 +33,7 @@ interface PipelineContext {
   fees: InclusionFees;
   tracker: FeeTracker | undefined;
   config: ChannelAccountsConfig;
+  returnTxHash?: boolean;
 }
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
@@ -97,6 +98,7 @@ async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<Ch
   const submitContext: SubmitContext = {
     contractId,
     isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
+    returnTxHash: ctx.returnTxHash,
   };
   return submitWithFeeBumpAndWait(
     ctx.fundRelayer,
@@ -182,6 +184,7 @@ async function handleFuncAuthSubmit(
     const submitContext: SubmitContext = {
       contractId,
       isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
+      returnTxHash: ctx.returnTxHash,
     };
     try {
       const result = await submitWithFeeBumpAndWait(
@@ -197,6 +200,13 @@ async function handleFuncAuthSubmit(
         await commitSequence(ctx.kv, ctx.network, channelInfo.address, sequence);
       } else {
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+      }
+      // When returnTxHash converted a WAIT_TIMEOUT throw into a pending response,
+      // replicate the same lock extension the catch block does for the throw path.
+      if (ctx.returnTxHash && result.status === 'pending' && poolLock) {
+        console.log(`[channels] Extending lock for WAIT_TIMEOUT error`);
+        await ctx.pool.extendLock(poolLock);
+        poolLock = undefined; // skip release in finally
       }
       return result;
     } catch (error: any) {
@@ -299,6 +309,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     fees,
     tracker,
     config,
+    returnTxHash: request.returnTxHash,
   };
 
   // 5. Branch by request type

@@ -46,6 +46,8 @@ export type ChannelsClientConfig = DirectHttpConfig | RelayerConfig;
 export interface ChannelsXdrRequest {
   /** Complete signed transaction envelope XDR */
   xdr: string;
+  /** When true, always return the tx hash in the response (even on timeout or on-chain failure) */
+  returnTxHash?: boolean;
 }
 
 /**
@@ -56,6 +58,8 @@ export interface ChannelsFuncAuthRequest {
   func: string;
   /** Array of authorization entry XDRs (base64) */
   auth: string[];
+  /** When true, always return the tx hash in the response (even on timeout or on-chain failure) */
+  returnTxHash?: boolean;
 }
 
 /**
@@ -72,6 +76,12 @@ export interface ChannelsTransactionResponse {
   returnValue?: string;
   /** Present only for read-only calls: the latest ledger at simulation time */
   latestLedger?: number;
+  /** Present when returnTxHash is set and the transaction failed on-chain */
+  error?: {
+    reason?: string;
+    resultCode?: string | null;
+    labUrl?: string | null;
+  };
   /** Optional metadata (logs and traces) */
   metadata?: {
     logs?: LogEntry[];

@@ -10,6 +10,18 @@ import { pluginError } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS } from './constants';
 import { ChannelAccountsRequest } from './types';
 
+function parseReturnTxHash(params: Record<string, unknown>): boolean {
+  if (!Object.prototype.hasOwnProperty.call(params, 'returnTxHash')) return false;
+  if (typeof params.returnTxHash !== 'boolean') {
+    throw pluginError('`returnTxHash` must be a boolean when provided', {
+      code: 'INVALID_PARAMS',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: { type: typeof params.returnTxHash },
+    });
+  }
+  return params.returnTxHash;
+}
+
 export function validateAndParseRequest(params: any): ChannelAccountsRequest {
   if (!params || typeof params !== 'object') {
     throw pluginError('Invalid request: params must be an object', {
@@ -31,7 +43,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
     }
 
     // Strict: cannot include func/auth when using xdr
-    const unknown = keys.filter((k) => !['xdr'].includes(k));
+    const unknown = keys.filter((k) => !['xdr', 'returnTxHash'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`xdr` request must not include other parameters', {
         code: 'INVALID_PARAMS',
@@ -40,7 +52,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'xdr', xdr: params.xdr.trim() };
+    return { type: 'xdr', xdr: params.xdr.trim(), returnTxHash: parseReturnTxHash(params) };
   }
 
   // Mode: func+auth
@@ -84,7 +96,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       }
     }
 
-    return { type: 'func-auth', func, auth };
+    return { type: 'func-auth', func, auth, returnTxHash: parseReturnTxHash(params) };
   }
 
   throw pluginError('Must pass either `xdr` or `func` and `auth`', {

@@ -19,6 +19,7 @@ import { FeeTracker } from './fee-tracking';
 export interface SubmitContext {
   contractId?: string;
   isLimited?: boolean;
+  returnTxHash?: boolean;
 }
 
 interface DecodedTransactionResult {
@@ -117,7 +118,23 @@ export async function submitWithFeeBumpAndWait(
         console.error(`${base}, reason=${rawReason}`);
       }
       const reason = sanitizeReason(rawReason);
-      const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
+      const reasonWithLab = labUrl
+        ? `${reason}. Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}`
+        : reason;
+
+      if (context?.returnTxHash) {
+        return {
+          transactionId: final.id,
+          status: final.status,
+          hash: final.hash ?? null,
+          error: {
+            reason: reasonWithLab,
+            resultCode: decoded?.resultCode ?? null,
+            labUrl,
+          },
+        };
+      }
+
       throw pluginError(reasonWithLab, {
         code: 'ONCHAIN_FAILED',
         status: HTTP_STATUS.BAD_REQUEST,
@@ -127,7 +144,7 @@ export async function submitWithFeeBumpAndWait(
           id: final.id,
           hash: final.hash ?? null,
           resultCode: decoded?.resultCode ?? null,
-          labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
+          labUrl,
         },
       });
     }
@@ -149,6 +166,14 @@ export async function submitWithFeeBumpAndWait(
     }
 
     // Otherwise, it's a timeout - don't track fees (status unknown)
+    if (context?.returnTxHash) {
+      return {
+        transactionId: submission.id,
+        status: 'pending',
+        hash: submission.hash ?? null,
+      };
+    }
+
     throw pluginError('Transaction wait timeout. It may still submit.', {
       code: 'WAIT_TIMEOUT',
       status: HTTP_STATUS.GATEWAY_TIMEOUT,

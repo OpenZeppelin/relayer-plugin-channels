@@ -123,6 +123,7 @@ vi.mock('../src/plugin/management', () => ({
 // Spy on sequence module
 import * as sequenceModule from '../src/plugin/sequence';
 import { submitWithFeeBumpAndWait } from '../src/plugin/submit';
+import { validateAndParseRequest } from '../src/plugin/validation';
 import { handler } from '../src/plugin/handler';
 
 const CHANNEL_ADDRESS = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
@@ -281,5 +282,131 @@ describe('handler sequence cache lifecycle', () => {
 
     expect(poolSpies.extendLock).not.toHaveBeenCalled();
     expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+  });
+});
+
+describe('handler with returnTxHash flag', () => {
+  let kv: FakeKV;
+  let commitSequenceSpy: ReturnType<typeof vi.spyOn>;
+  let clearSequenceSpy: ReturnType<typeof vi.spyOn>;
+  const mockSubmit = submitWithFeeBumpAndWait as ReturnType<typeof vi.fn>;
+  const mockValidate = validateAndParseRequest as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    kv = new FakeKV();
+    vi.clearAllMocks();
+    vi.spyOn(sequenceModule, 'getSequence').mockResolvedValue('42');
+    commitSequenceSpy = vi.spyOn(sequenceModule, 'commitSequence').mockResolvedValue(undefined);
+    clearSequenceSpy = vi.spyOn(sequenceModule, 'clearSequence').mockResolvedValue(undefined);
+    mockValidate.mockReturnValue({
+      type: 'func-auth',
+      func: { switch: () => ({ value: 0 }) },
+      auth: [],
+      returnTxHash: true,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('returns pending status with hash on timeout instead of throwing', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'pending',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    const result = await handler(ctx);
+
+    expect(result.status).toBe('pending');
+    expect(result.hash).toBe('hash-1');
+    expect(result.transactionId).toBe('tx-1');
+  });
+
+  test('extends lock and skips release on pending status', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'pending',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    expect(poolSpies.release).not.toHaveBeenCalled();
+  });
+
+  test('clears sequence on pending status', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'pending',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    expect(commitSequenceSpy).not.toHaveBeenCalled();
+    expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
+  });
+
+  test('returns failed status with hash and error details on on-chain failure', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'failed',
+      hash: 'hash-1',
+      error: {
+        reason: 'TxFailed',
+        resultCode: 'txFailed',
+        labUrl: null,
+      },
+    });
+
+    const ctx = makeContext(kv);
+    const result = await handler(ctx);
+
+    expect(result.status).toBe('failed');
+    expect(result.hash).toBe('hash-1');
+    expect(result.error).toEqual({
+      reason: 'TxFailed',
+      resultCode: 'txFailed',
+      labUrl: null,
+    });
+  });
+
+  test('clears sequence and releases lock on failed status', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'failed',
+      hash: 'hash-1',
+      error: { reason: 'TxFailed' },
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    expect(commitSequenceSpy).not.toHaveBeenCalled();
+    expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
+    expect(poolSpies.extendLock).not.toHaveBeenCalled();
+    expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+  });
+
+  test('commits sequence on confirmed status', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'confirmed',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    const result = await handler(ctx);
+
+    expect(result.status).toBe('confirmed');
+    expect(result.hash).toBe('hash-1');
+    expect(commitSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS, '42');
+    expect(clearSequenceSpy).not.toHaveBeenCalled();
   });
 });
