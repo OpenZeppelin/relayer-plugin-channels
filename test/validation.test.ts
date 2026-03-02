@@ -5,7 +5,7 @@ import { validateAndParseRequest } from '../src/plugin/validation';
 describe('validation', () => {
   test('accepts xdr-only request', () => {
     const out = validateAndParseRequest({ xdr: 'BASE64XDR' });
-    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR' });
+    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: false });
   });
 
   test('rejects xdr with extra keys', () => {
@@ -23,6 +23,85 @@ describe('validation', () => {
     const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
     const out = validateAndParseRequest({ func, auth });
     expect(out.type).toBe('func-auth');
+  });
+
+  test('accepts xdr with skipWait without unknown-key error', () => {
+    const out = validateAndParseRequest({ xdr: 'BASE64XDR', skipWait: true });
+    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: true });
+  });
+
+  test('parses skipWait as boolean in func+auth', () => {
+    const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
+    const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
+    const body = op.body();
+    const inv = body.invokeHostFunctionOp();
+    const func = inv.hostFunction().toXDR('base64');
+    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    const out = validateAndParseRequest({ func, auth, skipWait: true });
+    expect(out.type).toBe('func-auth');
+    expect((out as any).skipWait).toBe(true);
+  });
+
+  test('skipWait defaults to false', () => {
+    const out = validateAndParseRequest({ xdr: 'BASE64XDR' });
+    expect((out as any).skipWait).toBe(false);
+  });
+
+  test('rejects non-boolean skipWait in xdr request', () => {
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', skipWait: 'false' })).toThrow(
+      '`skipWait` must be a boolean'
+    );
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', skipWait: 1 })).toThrow('`skipWait` must be a boolean');
+  });
+
+  test('rejects non-boolean skipWait in func+auth request', () => {
+    const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
+    const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
+    const body = op.body();
+    const inv = body.invokeHostFunctionOp();
+    const func = inv.hostFunction().toXDR('base64');
+    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    expect(() => validateAndParseRequest({ func, auth, skipWait: 'true' })).toThrow('`skipWait` must be a boolean');
+  });
+
+  test('accepts getTransaction request', () => {
+    const out = validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' } });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1' });
+  });
+
+  test('trims getTransaction transactionId', () => {
+    const out = validateAndParseRequest({ getTransaction: { transactionId: '  tx-2  ' } });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-2' });
+  });
+
+  test('rejects getTransaction with missing transactionId', () => {
+    expect(() => validateAndParseRequest({ getTransaction: {} })).toThrow(
+      '`getTransaction.transactionId` must be a non-empty string'
+    );
+  });
+
+  test('rejects getTransaction with empty transactionId', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: '' } })).toThrow(
+      '`getTransaction.transactionId` must be a non-empty string'
+    );
+  });
+
+  test('rejects getTransaction with non-string transactionId', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 123 } })).toThrow(
+      '`getTransaction.transactionId` must be a non-empty string'
+    );
+  });
+
+  test('rejects getTransaction with extra top-level keys', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, extra: 1 } as any)).toThrow(
+      '`getTransaction` request must not include other parameters'
+    );
+  });
+
+  test('rejects getTransaction with extra inner keys', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1', extra: 'foo' } })).toThrow(
+      '`getTransaction` must only contain `transactionId`'
+    );
   });
 
   test('rejects missing both', () => {

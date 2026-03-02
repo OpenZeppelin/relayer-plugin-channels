@@ -106,12 +106,14 @@ vi.mock('../src/plugin/fee', () => ({
 }));
 
 // Mock validation to return func+auth request
+const mockValidateResult = {
+  type: 'func-auth',
+  func: { switch: () => ({ value: 0 }) },
+  auth: [],
+  skipWait: false,
+};
 vi.mock('../src/plugin/validation', () => ({
-  validateAndParseRequest: vi.fn().mockReturnValue({
-    type: 'func-auth',
-    func: { switch: () => ({ value: 0 }) },
-    auth: [],
-  }),
+  validateAndParseRequest: vi.fn().mockImplementation(() => ({ ...mockValidateResult })),
 }));
 
 // Mock management
@@ -196,7 +198,7 @@ describe('handler sequence cache lifecycle', () => {
     expect(clearSequenceSpy).not.toHaveBeenCalled();
   });
 
-  test('calls clearSequence on non-confirmed result status', async () => {
+  test('non-terminal status without skipWait still extends lock and clears sequence', async () => {
     mockSubmit.mockResolvedValue({
       transactionId: 'tx-1',
       status: 'pending',
@@ -209,6 +211,8 @@ describe('handler sequence cache lifecycle', () => {
     expect(result.status).toBe('pending');
     expect(commitSequenceSpy).not.toHaveBeenCalled();
     expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
+    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    expect(poolSpies.release).not.toHaveBeenCalled();
   });
 
   test('calls clearSequence on ONCHAIN_FAILED error', async () => {
@@ -282,4 +286,28 @@ describe('handler sequence cache lifecycle', () => {
     expect(poolSpies.extendLock).not.toHaveBeenCalled();
     expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
   });
+
+  test.each(['pending', 'sent', 'submitted'])(
+    'skipWait with %s status extends lock and skips release',
+    async (status) => {
+      mockValidateResult.skipWait = true;
+      mockSubmit.mockResolvedValue({
+        transactionId: 'tx-1',
+        status,
+        hash: null,
+      });
+
+      const ctx = makeContext(kv);
+      const result = await handler(ctx);
+
+      expect(result.status).toBe(status);
+      expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+      expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
+      expect(commitSequenceSpy).not.toHaveBeenCalled();
+      expect(poolSpies.release).not.toHaveBeenCalled();
+
+      // Reset for other tests
+      mockValidateResult.skipWait = false;
+    }
+  );
 });

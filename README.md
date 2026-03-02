@@ -37,6 +37,8 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
   - [Submit with Transaction XDR](#submit-with-transaction-xdr)
   - [Submit with Function and Auth](#submit-with-function-and-auth)
   - [Parameters](#parameters)
+  - [Fire-and-Forget with skipWait](#fire-and-forget-with-skipwait)
+  - [Get Transaction by ID](#get-transaction-by-id)
   - [Response](#response)
 - [How It Works](#how-it-works)
 - [Validation Rules](#validation-rules)
@@ -864,8 +866,73 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - `xdr` (string): Complete transaction envelope XDR (signed, not fee-bump)
 - `func` (string): Soroban host function XDR (base64)
 - `auth` (array): Array of Soroban authorization entry XDRs (base64)
+- `skipWait` (boolean, optional): When `true`, returns immediately after submitting the transaction without waiting for confirmation. Defaults to `false`. Must be a boolean — non-boolean values (e.g., `"false"`, `1`) are rejected.
+- `getTransaction` (object, optional): Poll for a transaction's status by ID. Cannot be combined with other parameters.
 
-**Note**: Provide either `xdr` OR `func`+`auth`, not both.
+**Note**: Provide either `xdr` OR `func`+`auth` OR `getTransaction`, not a combination.
+
+### Fire-and-Forget with `skipWait`
+
+When `skipWait: true` is passed with an `xdr` or `func`+`auth` request, the plugin submits the transaction and returns immediately with status `"pending"` instead of waiting for on-chain confirmation. This is useful for high-throughput scenarios where the caller handles confirmation separately.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "xdr": "AAAAAgAAAAB...",
+      "skipWait": true
+    }
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx_123456",
+    "status": "pending",
+    "hash": null
+  }
+}
+```
+
+Use the returned `transactionId` with `getTransaction` to poll for the final status.
+
+### Get Transaction by ID
+
+Poll for the status of a previously submitted transaction using its `transactionId`. This is typically used after a `skipWait` submission to check whether the transaction has been confirmed.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "getTransaction": {
+        "transactionId": "tx_123456"
+      }
+    }
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx_123456",
+    "status": "confirmed",
+    "hash": "1234567890abcdef..."
+  }
+}
+```
+
+The `status` field reflects the transaction's current state (e.g., `"pending"`, `"sent"`, `"submitted"`, `"confirmed"`, `"failed"`, `"expired"`). The `hash` field is `null` until the transaction is submitted.
 
 ### Response
 

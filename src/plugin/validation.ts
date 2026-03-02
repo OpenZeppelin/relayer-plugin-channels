@@ -21,6 +21,37 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
   // Disallow any management-shaped keys leaking into here; management is handled earlier
   const keys = Object.keys(params);
 
+  // Mode: getTransaction
+  if ('getTransaction' in params) {
+    const unknown = keys.filter((k) => k !== 'getTransaction');
+    if (unknown.length > 0) {
+      throw pluginError('`getTransaction` request must not include other parameters', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { unknown },
+      });
+    }
+
+    const gt = params.getTransaction;
+    if (!gt || typeof gt !== 'object' || typeof gt.transactionId !== 'string' || gt.transactionId.trim() === '') {
+      throw pluginError('`getTransaction.transactionId` must be a non-empty string', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+      });
+    }
+
+    const unknownInner = Object.keys(gt).filter((k) => k !== 'transactionId');
+    if (unknownInner.length > 0) {
+      throw pluginError('`getTransaction` must only contain `transactionId`', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { unknown: unknownInner },
+      });
+    }
+
+    return { type: 'get-transaction', transactionId: gt.transactionId.trim() };
+  }
+
   // Mode: XDR
   if ('xdr' in params) {
     if (typeof params.xdr !== 'string' || params.xdr.trim() === '') {
@@ -31,7 +62,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
     }
 
     // Strict: cannot include func/auth when using xdr
-    const unknown = keys.filter((k) => !['xdr'].includes(k));
+    const unknown = keys.filter((k) => !['xdr', 'skipWait'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`xdr` request must not include other parameters', {
         code: 'INVALID_PARAMS',
@@ -40,7 +71,14 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'xdr', xdr: params.xdr.trim() };
+    if (params.skipWait !== undefined && typeof params.skipWait !== 'boolean') {
+      throw pluginError('`skipWait` must be a boolean', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+      });
+    }
+
+    return { type: 'xdr', xdr: params.xdr.trim(), skipWait: params.skipWait === true };
   }
 
   // Mode: func+auth
@@ -84,7 +122,14 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       }
     }
 
-    return { type: 'func-auth', func, auth };
+    if (params.skipWait !== undefined && typeof params.skipWait !== 'boolean') {
+      throw pluginError('`skipWait` must be a boolean', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+      });
+    }
+
+    return { type: 'func-auth', func, auth, skipWait: params.skipWait === true };
   }
 
   throw pluginError('Must pass either `xdr` or `func` and `auth`', {
