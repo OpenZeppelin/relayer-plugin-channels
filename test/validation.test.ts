@@ -13,6 +13,12 @@ describe('validation', () => {
     expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', returnTxHash: true });
   });
 
+  test('rejects non-boolean returnTxHash in xdr mode', () => {
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', returnTxHash: 'true' as any })).toThrow(
+      '`returnTxHash` must be a boolean when provided'
+    );
+  });
+
   test('rejects xdr with extra keys', () => {
     expect(() => validateAndParseRequest({ xdr: 'X', extra: 1 } as any)).toThrow(
       '`xdr` request must not include other parameters'
@@ -41,6 +47,18 @@ describe('validation', () => {
     const out = validateAndParseRequest({ func, auth, returnTxHash: true });
     expect(out.type).toBe('func-auth');
     expect(out.returnTxHash).toBe(true);
+  });
+
+  test('rejects non-boolean returnTxHash in func+auth mode', () => {
+    const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
+    const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
+    const body = op.body();
+    const inv = body.invokeHostFunctionOp();
+    const func = inv.hostFunction().toXDR('base64');
+    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    expect(() => validateAndParseRequest({ func, auth, returnTxHash: 1 as any })).toThrow(
+      '`returnTxHash` must be a boolean when provided'
+    );
   });
 
   test('rejects missing both', () => {

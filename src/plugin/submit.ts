@@ -118,6 +118,9 @@ export async function submitWithFeeBumpAndWait(
         console.error(`${base}, reason=${rawReason}`);
       }
       const reason = sanitizeReason(rawReason);
+      const reasonWithLab = labUrl
+        ? `${reason}. Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}`
+        : reason;
 
       if (context?.returnTxHash) {
         return {
@@ -125,14 +128,13 @@ export async function submitWithFeeBumpAndWait(
           status: final.status,
           hash: final.hash ?? null,
           error: {
-            reason,
+            reason: reasonWithLab,
             resultCode: decoded?.resultCode ?? null,
-            labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
+            labUrl,
           },
         };
       }
 
-      const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
       throw pluginError(reasonWithLab, {
         code: 'ONCHAIN_FAILED',
         status: HTTP_STATUS.BAD_REQUEST,
@@ -142,7 +144,7 @@ export async function submitWithFeeBumpAndWait(
           id: final.id,
           hash: final.hash ?? null,
           resultCode: decoded?.resultCode ?? null,
-          labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
+          labUrl,
         },
       });
     }
