@@ -92,9 +92,15 @@ describe('validation', () => {
     );
   });
 
-  test('rejects getTransaction with extra keys', () => {
+  test('rejects getTransaction with extra top-level keys', () => {
     expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, extra: 1 } as any)).toThrow(
       '`getTransaction` request must not include other parameters'
+    );
+  });
+
+  test('rejects getTransaction with extra inner keys', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1', extra: 'foo' } })).toThrow(
+      '`getTransaction` must only contain `transactionId`'
     );
   });
 

@@ -205,7 +205,7 @@ async function handleFuncAuthSubmit(
       );
       if (result.status === 'pending' || result.status === 'sent' || result.status === 'submitted') {
         // extend lock and clear sequence
-        console.log(`[channels] skipWait: extending lock and clearing sequence`);
+        console.log(`[channels]: extending lock and clearing sequence`);
         await ctx.pool.extendLock(poolLock!);
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
         poolLock = undefined; // skip release in finally

@@ -40,6 +40,15 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
+    const unknownInner = Object.keys(gt).filter((k) => k !== 'transactionId');
+    if (unknownInner.length > 0) {
+      throw pluginError('`getTransaction` must only contain `transactionId`', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { unknown: unknownInner },
+      });
+    }
+
     return { type: 'get-transaction', transactionId: gt.transactionId.trim() };
   }
 

@@ -92,6 +92,9 @@ export async function submitWithFeeBumpAndWait(
   // skipWait: return immediately after sendTransaction without waiting for confirmation
   if (skipWait) {
     console.debug(`[channels] skipWait enabled, returning pending result immediately`);
+    if (tracker) {
+      await tracker.recordUsage(maxFee);
+    }
     return {
       transactionId: submission.id,
       status: 'pending',

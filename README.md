@@ -932,7 +932,7 @@ Response:
 }
 ```
 
-The `status` field reflects the transaction's current state (e.g., `"pending"`, `"sent"`, `"submitted"`, `"confirmed"`, `"failed"`, `"expired"`). The `hash` field is `null` until the transaction is confirmed on-chain.
+The `status` field reflects the transaction's current state (e.g., `"pending"`, `"sent"`, `"submitted"`, `"confirmed"`, `"failed"`, `"expired"`). The `hash` field is `null` until the transaction is submitted.
 
 ### Response
 

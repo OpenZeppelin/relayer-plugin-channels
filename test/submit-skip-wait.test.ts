@@ -94,4 +94,23 @@ describe('submitWithFeeBumpAndWait skipWait', () => {
 
     expect(transactionWait).toHaveBeenCalledTimes(1);
   });
+
+  test('skipWait records fee usage when tracker is provided', async () => {
+    const { fundRelayer, api } = makeMocks();
+    const tracker = { checkBudget: vi.fn(), recordUsage: vi.fn() };
+
+    await submitWithFeeBumpAndWait(
+      fundRelayer,
+      'xdr',
+      'testnet',
+      1000,
+      api,
+      Date.now(),
+      tracker as any,
+      undefined,
+      true
+    );
+
+    expect(tracker.recordUsage).toHaveBeenCalledWith(1000);
+  });
 });
