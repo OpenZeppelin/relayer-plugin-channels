@@ -21,6 +21,18 @@ function buildWriteTransactionData(): string {
   return sorobanData.toXDR('base64');
 }
 
+function buildWriteTransactionDataWithResourceFee(resourceFee: bigint): string {
+  const entry = xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+      key: xdr.ScVal.scvBool(true),
+      durability: xdr.ContractDataDurability.persistent(),
+    })
+  );
+  const sorobanData = new SorobanDataBuilder().setFootprint([entry], [entry]).setResourceFee(resourceFee).build();
+  return sorobanData.toXDR('base64');
+}
+
 function makeRelayerMock(result: object, error?: any) {
   return {
     rpc: vi.fn().mockResolvedValue({
@@ -417,5 +429,28 @@ describe('buildWithChannel', () => {
     expect(tx.source).toBe(CHANNEL_ADDRESS);
     // Verify the relayer was only called once (by simulateTransaction, not by buildWithChannel)
     expect(relayer.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  test('builds inner tx fee as classic fee + resource fee exactly once', async () => {
+    const resourceFee = 25102n;
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [] }],
+      transactionData: buildWriteTransactionDataWithResourceFee(resourceFee),
+      latestLedger: 12345,
+      // Intentionally set doubled minResourceFee to mirror problematic provider responses.
+      minResourceFee: (resourceFee * 2n).toString(),
+    };
+    const relayer = makeRelayerMock(rpcResult);
+    const simResult = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    const tx = buildWithChannel(
+      func,
+      [],
+      { address: CHANNEL_ADDRESS, sequence: '100' },
+      passphrase,
+      simResult.rawSimResult
+    );
+
+    expect(tx.fee).toBe((100n + resourceFee).toString());
   });
 });

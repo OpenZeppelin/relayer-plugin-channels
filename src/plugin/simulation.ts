@@ -145,43 +145,90 @@ export function buildWithChannel(
   simResult: rpc.Api.RawSimulateTransactionResponse,
   minSignatureExpirationLedgerBuffer: number = SIMULATION.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER
 ): Transaction {
-  // Fail fast: reject auth entries whose signatureExpirationLedger is too close
-  // to latestLedger before doing any assembly work.
+  if (!simResult.transactionData) {
+    throw pluginError('Simulation response missing transactionData', {
+      code: 'SIMULATION_INVALID_RESPONSE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+    });
+  }
+
+  // Parse sorobanData from the simulation result
+  let sorobanData: xdr.SorobanTransactionData;
+  try {
+    sorobanData = xdr.SorobanTransactionData.fromXDR(simResult.transactionData, 'base64');
+  } catch (err: any) {
+    throw pluginError('Failed to parse simulation transactionData', {
+      code: 'SIMULATION_INVALID_RESPONSE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+  }
+
+  // Resolve auth: use caller-provided auth if present, otherwise fall back to simulation auth
+  let resolvedAuth: xdr.SorobanAuthorizationEntry[];
+  if (auth && auth.length > 0) {
+    resolvedAuth = auth;
+  } else {
+    try {
+      resolvedAuth = (simResult.results?.[0]?.auth ?? []).map((a: string) =>
+        xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
+      );
+    } catch (err: any) {
+      throw pluginError('Failed to parse simulation auth entries', {
+        code: 'SIMULATION_INVALID_RESPONSE',
+        status: HTTP_STATUS.BAD_GATEWAY,
+        details: { message: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  }
+
+  // Validate resolved auth expiry before doing any assembly work.
   if (simResult.latestLedger) {
-    validateAuthExpiry(auth, simResult.latestLedger, minSignatureExpirationLedgerBuffer);
+    validateAuthExpiry(resolvedAuth, simResult.latestLedger, minSignatureExpirationLedgerBuffer);
   }
 
   const now = Math.floor(Date.now() / 1000);
   console.debug(
-    `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${auth?.length ?? 0}`
+    `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${resolvedAuth.length}`
   );
 
-  // Build inner transaction (source = channel)
+  // Build the transaction directly with sorobanData instead of using rpc.assembleTransaction().
+  //
+  // Why: stellar-base >=14.1.0 changed TransactionBuilder.build() to automatically add
+  // sorobanData.resourceFee() to the transaction fee (stellar/js-stellar-base#761).
+  // However, rpc.assembleTransaction() was not updated for this change — it still computes
+  // fee = classicFee + minResourceFee before calling cloneFrom/build, so build() then adds
+  // resourceFee a second time:
+  //
+  //   assembleTransaction path (broken with >=14.1.0):
+  //     baseFee = classicFee(100) + minResourceFee(25102) = 25202
+  //     build() adds resourceFee(25102) → final fee = 50304  (double-counted!)
+  //
+  //   Direct build path (correct):
+  //     baseFee = classicFee(100)
+  //     build() adds resourceFee(25102) → final fee = 25202  (correct)
+  //
+  // By passing sorobanData directly to TransactionBuilder, build() adds the resourceFee
+  // exactly once. This approach also removes the assembleTransaction network-format
+  // dependency and gives us explicit control over auth resolution.
   const transaction = new TransactionBuilder(new Account(channel.address, channel.sequence), {
     fee: SIMULATION.DEFAULT_FEE,
     networkPassphrase,
     timebounds: { minTime: SIMULATION.MIN_TIME_BOUND, maxTime: now + SIMULATION.MAX_TIME_BOUND_OFFSET_SECONDS },
+    sorobanData,
   })
     .addOperation(
       Operation.invokeHostFunction({
         func,
-        auth,
-        // No explicit source: default to transaction source (channel account)
+        auth: resolvedAuth,
       })
     )
     .build();
 
   try {
-    console.debug(
-      `[channels] Pre-assembly: tx.fee=${transaction.fee}, simResult.minResourceFee=${simResult.minResourceFee}, simResult._parsed=${(simResult as any)._parsed}`
-    );
-
-    // Use SDK's assembleTransaction to apply the cached simulation results
-    const prepared = rpc.assembleTransaction(transaction, simResult).build() as Transaction;
-
-    const resourceFee = prepared.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
-    console.debug(`[channels] Post-assembly: prepared.fee=${prepared.fee}, resourceFee=${resourceFee}`);
-    return prepared;
+    const resourceFee = transaction.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
+    console.debug(`[channels] Assembly complete: fee=${transaction.fee}, resourceFee=${resourceFee}`);
+    return transaction;
   } catch (err: any) {
     console.error(`[channels] Assembly error: ${err instanceof Error ? err.message : String(err)}`);
     throw pluginError('Transaction assembly failed', {
