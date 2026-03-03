@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.16.0
+
+### Minor Changes
+
+- 3d3c3e3: Fix issue with usage of assembleTransaction with latest stellar-base version
+
 ## 0.15.0
 
 ### Minor Changes
