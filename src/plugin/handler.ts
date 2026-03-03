@@ -174,7 +174,9 @@ async function handleFuncAuthSubmit(
       simulation.rawSimResult,
       ctx.config.minSignatureExpirationLedgerBuffer
     );
-    console.debug(`[channels] After assembly: built.fee=${built.fee}, minResourceFee=${simulation.rawSimResult.minResourceFee}`);
+    console.debug(
+      `[channels] After assembly: built.fee=${built.fee}, minResourceFee=${simulation.rawSimResult.minResourceFee}`
+    );
 
     const signedTx = await signWithChannelAndFund(
       built,

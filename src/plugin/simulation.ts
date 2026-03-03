@@ -145,17 +145,6 @@ export function buildWithChannel(
   simResult: rpc.Api.RawSimulateTransactionResponse,
   minSignatureExpirationLedgerBuffer: number = SIMULATION.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER
 ): Transaction {
-  // Fail fast: reject auth entries whose signatureExpirationLedger is too close
-  // to latestLedger before doing any assembly work.
-  if (simResult.latestLedger) {
-    validateAuthExpiry(auth, simResult.latestLedger, minSignatureExpirationLedgerBuffer);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  console.debug(
-    `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${auth?.length ?? 0}`
-  );
-
   if (!simResult.transactionData) {
     throw pluginError('Simulation response missing transactionData', {
       code: 'SIMULATION_INVALID_RESPONSE',
@@ -164,15 +153,44 @@ export function buildWithChannel(
   }
 
   // Parse sorobanData from the simulation result
-  const sorobanData = xdr.SorobanTransactionData.fromXDR(simResult.transactionData, 'base64');
+  let sorobanData: xdr.SorobanTransactionData;
+  try {
+    sorobanData = xdr.SorobanTransactionData.fromXDR(simResult.transactionData, 'base64');
+  } catch (err: any) {
+    throw pluginError('Failed to parse simulation transactionData', {
+      code: 'SIMULATION_INVALID_RESPONSE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+      details: { message: err instanceof Error ? err.message : String(err) },
+    });
+  }
 
   // Resolve auth: use caller-provided auth if present, otherwise fall back to simulation auth
-  const resolvedAuth =
-    auth && auth.length > 0
-      ? auth
-      : (simResult.results?.[0]?.auth ?? []).map((a: string) =>
-          xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
-        );
+  let resolvedAuth: xdr.SorobanAuthorizationEntry[];
+  if (auth && auth.length > 0) {
+    resolvedAuth = auth;
+  } else {
+    try {
+      resolvedAuth = (simResult.results?.[0]?.auth ?? []).map((a: string) =>
+        xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
+      );
+    } catch (err: any) {
+      throw pluginError('Failed to parse simulation auth entries', {
+        code: 'SIMULATION_INVALID_RESPONSE',
+        status: HTTP_STATUS.BAD_GATEWAY,
+        details: { message: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  }
+
+  // Validate resolved auth expiry before doing any assembly work.
+  if (simResult.latestLedger) {
+    validateAuthExpiry(resolvedAuth, simResult.latestLedger, minSignatureExpirationLedgerBuffer);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  console.debug(
+    `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${resolvedAuth.length}`
+  );
 
   // Build the transaction directly with sorobanData instead of using rpc.assembleTransaction().
   //

@@ -69,7 +69,8 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
   const contractId = getContractIdFromTransaction(transaction);
   const inclusionFee = getInclusionFee(contractId, limitedContracts, fees);
 
-  const computedFee = resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
+  const computedFee =
+    resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
   const innerTxFee = BigInt(transaction.fee);
 
   // Safety floor: fee bump max_fee must always cover the actual inner transaction fee.
