@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.15.0
+
+### Minor Changes
+
+- 164bb3c: Bump dependencies versions
+
 ## 0.14.0
 
 ### Minor Changes
