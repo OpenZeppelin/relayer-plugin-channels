@@ -32,7 +32,22 @@ describe('fee', () => {
     const op = contract.call('test_method');
     const sorobanData = new SorobanDataBuilder().setResourceFee(resourceFee).build();
     return new TransactionBuilder(sourceAccount, {
-      fee: resourceFee.toString(),
+      // Keep classic fee at 0 so build() adds resource fee exactly once.
+      fee: '0',
+      networkPassphrase: passphrase,
+    })
+      .addOperation(op)
+      .setSorobanData(sorobanData)
+      .setTimeout(30)
+      .build();
+  }
+
+  function buildSorobanTxWithInnerFee(classicFee: bigint, resourceFee: bigint): any {
+    const contract = new Contract(OTHER_CONTRACT);
+    const op = contract.call('test_method');
+    const sorobanData = new SorobanDataBuilder().setResourceFee(resourceFee).build();
+    return new TransactionBuilder(sourceAccount, {
+      fee: classicFee.toString(),
       networkPassphrase: passphrase,
     })
       .addOperation(op)
@@ -74,6 +89,17 @@ describe('fee', () => {
       const tx = buildContractCallTx(LIMITED_CONTRACT);
       const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
       expect(fee).toBe(FEE.NON_SOROBAN_FEE + DEFAULT_FEES.inclusionFeeDefault);
+    });
+
+    test('uses inner tx fee as floor when computed fee would underpay', () => {
+      const resourceFee = 25102n;
+      // With stellar-sdk >=14.1.0, build() adds resource fee on top of classic fee.
+      // classic=25202 and resource=25102 yields inner fee 50304.
+      const tx = buildSorobanTxWithInnerFee(25202n, resourceFee);
+
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(tx.fee).toBe('50304');
+      expect(fee).toBe(50304 + DEFAULT_FEES.inclusionFeeDefault);
     });
   });
 

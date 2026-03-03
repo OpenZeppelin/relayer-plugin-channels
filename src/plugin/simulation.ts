@@ -156,28 +156,61 @@ export function buildWithChannel(
     `[channels] Building tx: channel=${channel.address}, seq=${channel.sequence}, auth_count=${auth?.length ?? 0}`
   );
 
-  // Build inner transaction (source = channel)
+  if (!simResult.transactionData) {
+    throw pluginError('Simulation response missing transactionData', {
+      code: 'SIMULATION_INVALID_RESPONSE',
+      status: HTTP_STATUS.BAD_GATEWAY,
+    });
+  }
+
+  // Parse sorobanData from the simulation result
+  const sorobanData = xdr.SorobanTransactionData.fromXDR(simResult.transactionData, 'base64');
+
+  // Resolve auth: use caller-provided auth if present, otherwise fall back to simulation auth
+  const resolvedAuth =
+    auth && auth.length > 0
+      ? auth
+      : (simResult.results?.[0]?.auth ?? []).map((a: string) =>
+          xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
+        );
+
+  // Build the transaction directly with sorobanData instead of using rpc.assembleTransaction().
+  //
+  // Why: stellar-base >=14.1.0 changed TransactionBuilder.build() to automatically add
+  // sorobanData.resourceFee() to the transaction fee (stellar/js-stellar-base#761).
+  // However, rpc.assembleTransaction() was not updated for this change — it still computes
+  // fee = classicFee + minResourceFee before calling cloneFrom/build, so build() then adds
+  // resourceFee a second time:
+  //
+  //   assembleTransaction path (broken with >=14.1.0):
+  //     baseFee = classicFee(100) + minResourceFee(25102) = 25202
+  //     build() adds resourceFee(25102) → final fee = 50304  (double-counted!)
+  //
+  //   Direct build path (correct):
+  //     baseFee = classicFee(100)
+  //     build() adds resourceFee(25102) → final fee = 25202  (correct)
+  //
+  // By passing sorobanData directly to TransactionBuilder, build() adds the resourceFee
+  // exactly once. This approach also removes the assembleTransaction network-format
+  // dependency and gives us explicit control over auth resolution.
   const transaction = new TransactionBuilder(new Account(channel.address, channel.sequence), {
     fee: SIMULATION.DEFAULT_FEE,
     networkPassphrase,
     timebounds: { minTime: SIMULATION.MIN_TIME_BOUND, maxTime: now + SIMULATION.MAX_TIME_BOUND_OFFSET_SECONDS },
+    sorobanData,
   })
     .addOperation(
       Operation.invokeHostFunction({
         func,
-        auth,
-        // No explicit source: default to transaction source (channel account)
+        auth: resolvedAuth,
       })
     )
     .build();
 
   try {
-    // Use SDK's assembleTransaction to apply the cached simulation results
-    const prepared = rpc.assembleTransaction(transaction, simResult).build() as Transaction;
-
-    const resourceFee = prepared.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
-    console.debug(`[channels] Assembly complete: resourceFee=${resourceFee}`);
-    return prepared;
+    const resourceFee = transaction.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
+    console.debug(`[channels] Assembly complete: fee=${transaction.fee}, resourceFee=${resourceFee}`);
+    return transaction;
   } catch (err: any) {
     console.error(`[channels] Assembly error: ${err instanceof Error ? err.message : String(err)}`);
     throw pluginError('Transaction assembly failed', {

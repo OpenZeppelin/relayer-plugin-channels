@@ -69,10 +69,21 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
   const contractId = getContractIdFromTransaction(transaction);
   const inclusionFee = getInclusionFee(contractId, limitedContracts, fees);
 
-  const fee = resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
+  const computedFee = resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
+  const innerTxFee = BigInt(transaction.fee);
+
+  // Safety floor: fee bump max_fee must always cover the actual inner transaction fee.
+  // This protects against upstream fee-field mismatches that can produce a larger inner fee.
+  const fee = computedFee >= innerTxFee ? computedFee : innerTxFee + BigInt(inclusionFee);
+
+  if (fee !== computedFee) {
+    console.warn(
+      `[channels] Fee mismatch detected: computed=${computedFee}, innerTxFee=${innerTxFee}. Using max_fee=${fee}`
+    );
+  }
 
   console.debug(
-    `[channels] Calculated max_fee: ${Number(fee)} stroops (resourceFee: ${resourceFee}, inclusionFee: ${inclusionFee})`
+    `[channels] Calculated max_fee: ${Number(fee)} stroops (resourceFee: ${resourceFee}, inclusionFee: ${inclusionFee}, innerTxFee: ${innerTxFee})`
   );
   return Number(fee);
 }
