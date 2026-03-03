@@ -172,11 +172,15 @@ export function buildWithChannel(
     .build();
 
   try {
+    console.debug(
+      `[channels] Pre-assembly: tx.fee=${transaction.fee}, simResult.minResourceFee=${simResult.minResourceFee}, simResult._parsed=${(simResult as any)._parsed}`
+    );
+
     // Use SDK's assembleTransaction to apply the cached simulation results
     const prepared = rpc.assembleTransaction(transaction, simResult).build() as Transaction;
 
     const resourceFee = prepared.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
-    console.debug(`[channels] Assembly complete: resourceFee=${resourceFee}`);
+    console.debug(`[channels] Post-assembly: prepared.fee=${prepared.fee}, resourceFee=${resourceFee}`);
     return prepared;
   } catch (err: any) {
     console.error(`[channels] Assembly error: ${err instanceof Error ? err.message : String(err)}`);

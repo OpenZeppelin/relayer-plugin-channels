@@ -12,11 +12,11 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1
       '@openzeppelin/relayer-sdk':
-        specifier: ^1.9.0
-        version: 1.9.0
+        specifier: ^1.10.0
+        version: 1.10.0
       '@stellar/stellar-sdk':
-        specifier: ^14.5.0
-        version: 14.5.0
+        specifier: ^14.6.0
+        version: 14.6.0
       axios:
         specifier: ^1.13.5
         version: 1.13.5
@@ -370,8 +370,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@openzeppelin/relayer-sdk@1.9.0':
-    resolution: {integrity: sha512-G3Zhg0imaT9Ej1cE9Cq5d4uQvW+DinD2GvRuiPWo3+O9KI8ivBnGJkjEGgK9Ja3/QsUNIfx8Gk5Mdw2sPXjVWA==}
+  '@openzeppelin/relayer-sdk@1.10.0':
+    resolution: {integrity: sha512-C7v4C63VnFR4keISicpcDf4Ix646sa1OdokzddFeSPEGlJIY2b/XJ9sIWiXOBVJVGzbB+RdX3/fbkygAPhcVNw==}
     engines: {node: '>=22.14.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
 
   '@pkgr/core@0.2.9':
@@ -509,12 +509,12 @@ packages:
   '@stellar/js-xdr@3.1.2':
     resolution: {integrity: sha512-VVolPL5goVEIsvuGqDc5uiKxV03lzfWdvYg1KikvwheDmTBO68CKDji3bAZ/kppZrx5iTA8z3Ld5yuytcvhvOQ==}
 
-  '@stellar/stellar-base@14.0.4':
-    resolution: {integrity: sha512-UbNW6zbdOBXJwLAV2mMak0bIC9nw3IZVlQXkv2w2dk1jgCbJjy3oRVC943zeGE5JAm0Z9PHxrIjmkpGhayY7kw==}
+  '@stellar/stellar-base@14.1.0':
+    resolution: {integrity: sha512-A8kFli6QGy22SRF45IjgPAJfUNGjnI+R7g4DF5NZYVsD1kGf7B4ITyc4OPclLV9tqNI4/lXxafGEw0JEUbHixw==}
     engines: {node: '>=20.0.0'}
 
-  '@stellar/stellar-sdk@14.5.0':
-    resolution: {integrity: sha512-Uzjq+An/hUA+Q5ERAYPtT0+MMiwWnYYWMwozmZMjxjdL2MmSjucBDF8Q04db6K/ekU4B5cHuOfsdlrfaxQYblw==}
+  '@stellar/stellar-sdk@14.6.0':
+    resolution: {integrity: sha512-uAFI32VsrKYUL/b5P7LM80M0N+amLPLJJ/zEibwcCwe5jbbXht7AUNVekyE6WFDZaUtqDtIWb7R+rJ+xk9qRRA==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -1955,7 +1955,7 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@openzeppelin/relayer-sdk@1.9.0':
+  '@openzeppelin/relayer-sdk@1.10.0':
     dependencies:
       axios: 1.13.5
     transitivePeerDependencies:
@@ -2042,7 +2042,7 @@ snapshots:
 
   '@stellar/js-xdr@3.1.2': {}
 
-  '@stellar/stellar-base@14.0.4':
+  '@stellar/stellar-base@14.1.0':
     dependencies:
       '@noble/curves': 1.9.7
       '@stellar/js-xdr': 3.1.2
@@ -2051,9 +2051,9 @@ snapshots:
       buffer: 6.0.3
       sha.js: 2.4.12
 
-  '@stellar/stellar-sdk@14.5.0':
+  '@stellar/stellar-sdk@14.6.0':
     dependencies:
-      '@stellar/stellar-base': 14.0.4
+      '@stellar/stellar-base': 14.1.0
       axios: 1.13.5
       bignumber.js: 9.3.1
       commander: 14.0.3
