@@ -174,6 +174,7 @@ async function handleFuncAuthSubmit(
       simulation.rawSimResult,
       ctx.config.minSignatureExpirationLedgerBuffer
     );
+    console.debug(`[channels] After assembly: built.fee=${built.fee}, minResourceFee=${simulation.rawSimResult.minResourceFee}`);
 
     const signedTx = await signWithChannelAndFund(
       built,
@@ -185,6 +186,7 @@ async function handleFuncAuthSubmit(
     );
 
     const maxFee = calculateMaxFee(signedTx, ctx.acquireOptions.limitedContracts, ctx.fees);
+    console.debug(`[channels] After signing: signedTx.fee=${signedTx.fee}, maxFee=${maxFee}`);
     const contractId = getContractIdFromFunc(func);
     await ctx.tracker?.checkBudget(maxFee);
     const submitContext: SubmitContext = {
