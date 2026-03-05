@@ -62,7 +62,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
     }
 
     // Strict: cannot include func/auth when using xdr
-    const unknown = keys.filter((k) => !['xdr', 'skipWait'].includes(k));
+    const unknown = keys.filter((k) => !['xdr', 'skipWait', 'x402'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`xdr` request must not include other parameters', {
         code: 'INVALID_PARAMS',
@@ -78,7 +78,14 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'xdr', xdr: params.xdr.trim(), skipWait: params.skipWait === true };
+    if (params.x402 !== undefined && typeof params.x402 !== 'boolean') {
+      throw pluginError('`x402` must be a boolean', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+      });
+    }
+
+    return { type: 'xdr', xdr: params.xdr.trim(), skipWait: params.skipWait === true, x402: params.x402 === true };
   }
 
   // Mode: func+auth
@@ -129,7 +136,14 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'func-auth', func, auth, skipWait: params.skipWait === true };
+    if (params.x402 !== undefined && typeof params.x402 !== 'boolean') {
+      throw pluginError('`x402` must be a boolean', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
+      });
+    }
+
+    return { type: 'func-auth', func, auth, skipWait: params.skipWait === true, x402: params.x402 === true };
   }
 
   throw pluginError('Must pass either `xdr` or `func` and `auth`', {

@@ -14,6 +14,7 @@ const DEFAULT_INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1; // 201
 
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
+  x402FundRelayerId?: string;
   network: 'testnet' | 'mainnet';
   lockTtlSeconds: number;
   adminSecret?: string;
@@ -146,6 +147,7 @@ export function loadConfig(): ChannelAccountsConfig {
 
   return {
     fundRelayerId: requireEnv('FUND_RELAYER_ID'),
+    x402FundRelayerId: parseOptionalString('X402_FUND_RELAYER_ID'),
     network: networkRaw as 'testnet' | 'mainnet',
     lockTtlSeconds: parseLockTtl(),
     adminSecret: parseOptionalString('PLUGIN_ADMIN_SECRET'),

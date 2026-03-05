@@ -12,8 +12,14 @@
 import type { xdr } from '@stellar/stellar-sdk';
 
 export type ChannelAccountsRequest =
-  | { type: 'xdr'; xdr: string; skipWait: boolean }
-  | { type: 'func-auth'; func: xdr.HostFunction; auth: xdr.SorobanAuthorizationEntry[]; skipWait: boolean }
+  | { type: 'xdr'; xdr: string; skipWait: boolean; x402: boolean }
+  | {
+      type: 'func-auth';
+      func: xdr.HostFunction;
+      auth: xdr.SorobanAuthorizationEntry[];
+      skipWait: boolean;
+      x402: boolean;
+    }
   | { type: 'get-transaction'; transactionId: string };
 
 /**

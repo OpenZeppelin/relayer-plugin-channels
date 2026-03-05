@@ -278,8 +278,17 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
   );
 
-  // 2. Get fund relayer
-  const fundRelayer = api.useRelayer(config.fundRelayerId);
+  // 2. Get fund relayer (use x402-specific fund relayer when requested)
+  const isX402 = request.type !== 'get-transaction' && request.x402 === true;
+  if (isX402 && !config.x402FundRelayerId) {
+    throw pluginError('x402 fund relayer not configured', {
+      code: 'CONFIG_MISSING',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+      details: { name: 'X402_FUND_RELAYER_ID' },
+    });
+  }
+  const fundRelayerId = isX402 && config.x402FundRelayerId ? config.x402FundRelayerId : config.fundRelayerId;
+  const fundRelayer = api.useRelayer(fundRelayerId);
 
   // 2a. Handle get-transaction early — no pool, channel, or simulation needed
   if (request.type === 'get-transaction') {

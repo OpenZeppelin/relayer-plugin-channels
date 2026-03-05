@@ -48,6 +48,8 @@ export interface ChannelsXdrRequest {
   xdr: string;
   /** When true, returns immediately after submission without waiting for confirmation */
   skipWait?: boolean;
+  /** When true, uses the x402 fund relayer for fee bumping */
+  x402?: boolean;
 }
 
 /**
@@ -60,6 +62,8 @@ export interface ChannelsFuncAuthRequest {
   auth: string[];
   /** When true, returns immediately after submission without waiting for confirmation */
   skipWait?: boolean;
+  /** When true, uses the x402 fund relayer for fee bumping */
+  x402?: boolean;
 }
 
 /**
