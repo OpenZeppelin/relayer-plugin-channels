@@ -23,12 +23,19 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
 
   // Mode: getTransaction
   if ('getTransaction' in params) {
-    const unknown = keys.filter((k) => k !== 'getTransaction');
+    const unknown = keys.filter((k) => !['getTransaction', 'x402'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`getTransaction` request must not include other parameters', {
         code: 'INVALID_PARAMS',
         status: HTTP_STATUS.BAD_REQUEST,
         details: { unknown },
+      });
+    }
+
+    if (params.x402 !== undefined && typeof params.x402 !== 'boolean') {
+      throw pluginError('`x402` must be a boolean', {
+        code: 'INVALID_PARAMS',
+        status: HTTP_STATUS.BAD_REQUEST,
       });
     }
 
@@ -49,7 +56,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'get-transaction', transactionId: gt.transactionId.trim() };
+    return { type: 'get-transaction', transactionId: gt.transactionId.trim(), x402: params.x402 === true };
   }
 
   // Mode: XDR

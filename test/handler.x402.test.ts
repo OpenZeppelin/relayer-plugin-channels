@@ -195,16 +195,31 @@ describe('x402 fund relayer selection', () => {
     expect(useRelayerMock).toHaveBeenCalledWith('fund-1');
   });
 
-  test('uses default fund relayer for get-transaction requests', async () => {
+  test('uses default fund relayer for get-transaction when x402 is false', async () => {
     configOverride = { x402FundRelayerId: 'x402-fund-1' };
     mockValidateResult = {
       type: 'get-transaction' as const,
       transactionId: 'tx-123',
+      x402: false,
     };
 
     const ctx = makeContext();
     await handler(ctx);
 
     expect(useRelayerMock).toHaveBeenCalledWith('fund-1');
+  });
+
+  test('uses x402 fund relayer for get-transaction when x402 is true', async () => {
+    configOverride = { x402FundRelayerId: 'x402-fund-1' };
+    mockValidateResult = {
+      type: 'get-transaction' as const,
+      transactionId: 'tx-123',
+      x402: true,
+    };
+
+    const ctx = makeContext();
+    await handler(ctx);
+
+    expect(useRelayerMock).toHaveBeenCalledWith('x402-fund-1');
   });
 });

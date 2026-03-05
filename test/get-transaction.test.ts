@@ -33,6 +33,7 @@ vi.mock('../src/plugin/management', () => ({
 const mockValidateResult = {
   type: 'get-transaction' as const,
   transactionId: 'tx-123',
+  x402: false,
 };
 vi.mock('../src/plugin/validation', () => ({
   validateAndParseRequest: vi.fn().mockImplementation(() => ({ ...mockValidateResult })),

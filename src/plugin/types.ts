@@ -20,7 +20,7 @@ export type ChannelAccountsRequest =
       skipWait: boolean;
       x402: boolean;
     }
-  | { type: 'get-transaction'; transactionId: string };
+  | { type: 'get-transaction'; transactionId: string; x402: boolean };
 
 /**
  * Plugin response format aligned with launchtube

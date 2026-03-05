@@ -66,12 +66,23 @@ describe('validation', () => {
 
   test('accepts getTransaction request', () => {
     const out = validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' } });
-    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1' });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1', x402: false });
   });
 
   test('trims getTransaction transactionId', () => {
     const out = validateAndParseRequest({ getTransaction: { transactionId: '  tx-2  ' } });
-    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-2' });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-2', x402: false });
+  });
+
+  test('accepts getTransaction with x402 flag', () => {
+    const out = validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, x402: true });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1', x402: true });
+  });
+
+  test('rejects getTransaction with non-boolean x402', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, x402: 'yes' })).toThrow(
+      '`x402` must be a boolean'
+    );
   });
 
   test('rejects getTransaction with missing transactionId', () => {

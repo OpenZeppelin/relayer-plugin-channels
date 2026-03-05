@@ -279,7 +279,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   );
 
   // 2. Get fund relayer (use x402-specific fund relayer when requested)
-  const isX402 = request.type !== 'get-transaction' && request.x402 === true;
+  const isX402 = request.x402 === true;
   if (isX402 && !config.x402FundRelayerId) {
     throw pluginError('x402 fund relayer not configured', {
       code: 'CONFIG_MISSING',
@@ -306,14 +306,14 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     throw pluginError('Fund relayer not found', {
       code: 'RELAYER_UNAVAILABLE',
       status: HTTP_STATUS.BAD_GATEWAY,
-      details: { relayerId: config.fundRelayerId },
+      details: { relayerId: fundRelayerId },
     });
   }
   if (fundInfo.network_type !== 'stellar') {
     throw pluginError('Fund relayer network type must be stellar', {
       code: 'UNSUPPORTED_NETWORK',
       status: HTTP_STATUS.BAD_REQUEST,
-      details: { network_type: fundInfo.network_type, relayerId: config.fundRelayerId },
+      details: { network_type: fundInfo.network_type, relayerId: fundRelayerId },
     });
   }
 
