@@ -373,7 +373,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - If `x402: true` is sent but `X402_FUND_RELAYER_ID` is not configured, the plugin returns a `CONFIG_MISSING` error
 - When `x402` is `false` or omitted, the primary `FUND_RELAYER_ID` is always used, even if `X402_FUND_RELAYER_ID` is configured
 - `x402` must be a boolean — non-boolean values (e.g., `"true"`, `1`) are rejected
-- `getTransaction` requests always use the primary fund relayer regardless of x402 configuration
+- `getTransaction` requests can also include `x402: true`, when present, polling uses `X402_FUND_RELAYER_ID` and should match the relayer used for submission
 
 ## Contract Capacity Limits
 
