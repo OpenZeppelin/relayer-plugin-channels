@@ -125,8 +125,16 @@ function getKeypair(accountName?: string): { keypair: Keypair; address: string }
   return { keypair: Keypair.fromSecret(secret), address };
 }
 
-async function buildSignedSelfPayment(rpcServer: rpc.Server, passphrase: string, address: string, keypair: Keypair) {
-  const account = await rpcServer.getAccount(address);
+async function buildSignedSelfPayment(
+  rpcServer: rpc.Server,
+  passphrase: string,
+  address: string,
+  keypair: Keypair,
+  sequenceOverride?: string
+) {
+  const account = sequenceOverride
+    ? new Account(address, sequenceOverride)
+    : await rpcServer.getAccount(address);
   const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: passphrase })
     .addOperation(
       Operation.payment({ source: address, destination: address, asset: Asset.native(), amount: '0.0000010' })
@@ -246,6 +254,8 @@ async function main() {
     address: string;
     contractId: string;
     debug: boolean;
+    /** When running with concurrency > 1, each run gets a unique sequence to avoid duplicate tx hashes */
+    sequenceOverride?: string;
   };
   const ctx: Ctx = { client, rpc: rpcServer, passphrase, keypair, address, contractId, debug };
 
@@ -253,8 +263,8 @@ async function main() {
     {
       id: 'xdr-payment',
       label: 'XDR submit-only: signed self-payment',
-      run: async ({ client, rpc, passphrase, address, keypair, debug }) => {
-        const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair);
+      run: async ({ client, rpc, passphrase, address, keypair, debug, sequenceOverride }) => {
+        const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair, sequenceOverride);
         const res = await client.submitTransaction({ xdr: tx.toXDR() });
         printResult('xdr-payment', { success: true, data: res }, debug);
       },
@@ -329,12 +339,20 @@ async function main() {
     for (const t of selected) {
       console.log(`📋 ${t.label} (x${concurrency} parallel)...`);
       const testStart = Date.now();
-      const promises = Array.from({ length: concurrency }, (_, i) =>
-        t.run(ctx).then(
+      // For xdr-payment, pre-fetch account so each parallel run gets a unique sequence (avoid duplicate hashes)
+      const needsUniqueSeq = t.id === 'xdr-payment';
+      const baseSeq = needsUniqueSeq
+        ? (await rpcServer.getAccount(address)).sequenceNumber()
+        : undefined;
+      const promises = Array.from({ length: concurrency }, (_, i) => {
+        const runCtx: Ctx = needsUniqueSeq && baseSeq
+          ? { ...ctx, sequenceOverride: (BigInt(baseSeq) + BigInt(i)).toString() }
+          : ctx;
+        return t.run(runCtx).then(
           () => ({ index: i, success: true, error: null }),
           (err) => ({ index: i, success: false, error: err })
-        )
-      );
+        );
+      });
       const results = await Promise.all(promises);
       const testElapsed = Date.now() - testStart;
       const succeeded = results.filter((r) => r.success).length;
