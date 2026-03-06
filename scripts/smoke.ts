@@ -132,9 +132,7 @@ async function buildSignedSelfPayment(
   keypair: Keypair,
   sequenceOverride?: string
 ) {
-  const account = sequenceOverride
-    ? new Account(address, sequenceOverride)
-    : await rpcServer.getAccount(address);
+  const account = sequenceOverride ? new Account(address, sequenceOverride) : await rpcServer.getAccount(address);
   const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: passphrase })
     .addOperation(
       Operation.payment({ source: address, destination: address, asset: Asset.native(), amount: '0.0000010' })
@@ -341,13 +339,13 @@ async function main() {
       const testStart = Date.now();
       // For xdr-payment, pre-fetch account so each parallel run gets a unique sequence (avoid duplicate hashes)
       const needsUniqueSeq = t.id === 'xdr-payment';
+      // eslint-disable-next-line prettier/prettier
       const baseSeq = needsUniqueSeq
         ? (await rpcServer.getAccount(address)).sequenceNumber()
         : undefined;
       const promises = Array.from({ length: concurrency }, (_, i) => {
-        const runCtx: Ctx = needsUniqueSeq && baseSeq
-          ? { ...ctx, sequenceOverride: (BigInt(baseSeq) + BigInt(i)).toString() }
-          : ctx;
+        const runCtx: Ctx =
+          needsUniqueSeq && baseSeq ? { ...ctx, sequenceOverride: (BigInt(baseSeq) + BigInt(i)).toString() } : ctx;
         return t.run(runCtx).then(
           () => ({ index: i, success: true, error: null }),
           (err) => ({ index: i, success: false, error: err })
