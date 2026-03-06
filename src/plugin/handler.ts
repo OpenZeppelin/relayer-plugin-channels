@@ -272,14 +272,25 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     });
   }
 
-  // 1. Validate and parse request (xdr OR func+auth)
+  // Validate and parse request (xdr OR func+auth)
   const request = validateAndParseRequest(params);
   console.debug(
     `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
   );
 
-  // 2. Get fund relayer
-  const fundRelayer = api.useRelayer(config.fundRelayerId);
+  // Get fund relayer (use alternative fund relayer when requested)
+  let fundRelayerId = config.fundRelayerId;
+  if (request.fundRelayerId) {
+    if (!config.allowedFundRelayerIds.has(request.fundRelayerId)) {
+      throw pluginError(`Fund relayer '${request.fundRelayerId}' is not in the allowed list`, {
+        code: 'CONFIG_MISSING',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { fundRelayerId: request.fundRelayerId },
+      });
+    }
+    fundRelayerId = request.fundRelayerId;
+  }
+  const fundRelayer = api.useRelayer(fundRelayerId);
 
   // 2a. Handle get-transaction early — no pool, channel, or simulation needed
   if (request.type === 'get-transaction') {
@@ -297,14 +308,14 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     throw pluginError('Fund relayer not found', {
       code: 'RELAYER_UNAVAILABLE',
       status: HTTP_STATUS.BAD_GATEWAY,
-      details: { relayerId: config.fundRelayerId },
+      details: { relayerId: fundRelayerId },
     });
   }
   if (fundInfo.network_type !== 'stellar') {
     throw pluginError('Fund relayer network type must be stellar', {
       code: 'UNSUPPORTED_NETWORK',
       status: HTTP_STATUS.BAD_REQUEST,
-      details: { network_type: fundInfo.network_type, relayerId: config.fundRelayerId },
+      details: { network_type: fundInfo.network_type, relayerId: fundRelayerId },
     });
   }
 

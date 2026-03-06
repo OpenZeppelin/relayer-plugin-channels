@@ -9,6 +9,7 @@ import { FakeKV } from './helpers/fakeKV';
 let configOverride: Record<string, any> = {};
 const baseConfig = {
   fundRelayerId: 'fund-1',
+  allowedFundRelayerIds: new Set<string>(),
   network: 'testnet',
   lockTtlSeconds: 30,
   apiKeyHeader: 'x-api-key',
@@ -33,6 +34,7 @@ vi.mock('../src/plugin/management', () => ({
 const mockValidateResult = {
   type: 'get-transaction' as const,
   transactionId: 'tx-123',
+  fundRelayerId: undefined as string | undefined,
 };
 vi.mock('../src/plugin/validation', () => ({
   validateAndParseRequest: vi.fn().mockImplementation(() => ({ ...mockValidateResult })),

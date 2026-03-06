@@ -10,6 +10,25 @@ import { pluginError } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS } from './constants';
 import { ChannelAccountsRequest } from './types';
 
+function validateFundRelayerId(params: any): void {
+  if (
+    params.fundRelayerId !== undefined &&
+    (typeof params.fundRelayerId !== 'string' || params.fundRelayerId.trim() === '')
+  ) {
+    throw pluginError('`fundRelayerId` must be a non-empty string', {
+      code: 'INVALID_PARAMS',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
+}
+
+function parseFundRelayerId(params: any): string | undefined {
+  if (params.fundRelayerId !== undefined && typeof params.fundRelayerId === 'string') {
+    return params.fundRelayerId.trim();
+  }
+  return undefined;
+}
+
 export function validateAndParseRequest(params: any): ChannelAccountsRequest {
   if (!params || typeof params !== 'object') {
     throw pluginError('Invalid request: params must be an object', {
@@ -23,7 +42,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
 
   // Mode: getTransaction
   if ('getTransaction' in params) {
-    const unknown = keys.filter((k) => k !== 'getTransaction');
+    const unknown = keys.filter((k) => !['getTransaction', 'fundRelayerId'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`getTransaction` request must not include other parameters', {
         code: 'INVALID_PARAMS',
@@ -31,6 +50,8 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
         details: { unknown },
       });
     }
+
+    validateFundRelayerId(params);
 
     const gt = params.getTransaction;
     if (!gt || typeof gt !== 'object' || typeof gt.transactionId !== 'string' || gt.transactionId.trim() === '') {
@@ -49,7 +70,11 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'get-transaction', transactionId: gt.transactionId.trim() };
+    return {
+      type: 'get-transaction',
+      transactionId: gt.transactionId.trim(),
+      fundRelayerId: parseFundRelayerId(params),
+    };
   }
 
   // Mode: XDR
@@ -62,7 +87,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
     }
 
     // Strict: cannot include func/auth when using xdr
-    const unknown = keys.filter((k) => !['xdr', 'skipWait'].includes(k));
+    const unknown = keys.filter((k) => !['xdr', 'skipWait', 'fundRelayerId'].includes(k));
     if (unknown.length > 0) {
       throw pluginError('`xdr` request must not include other parameters', {
         code: 'INVALID_PARAMS',
@@ -78,7 +103,14 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'xdr', xdr: params.xdr.trim(), skipWait: params.skipWait === true };
+    validateFundRelayerId(params);
+
+    return {
+      type: 'xdr',
+      xdr: params.xdr.trim(),
+      skipWait: params.skipWait === true,
+      fundRelayerId: parseFundRelayerId(params),
+    };
   }
 
   // Mode: func+auth
@@ -129,7 +161,15 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
       });
     }
 
-    return { type: 'func-auth', func, auth, skipWait: params.skipWait === true };
+    validateFundRelayerId(params);
+
+    return {
+      type: 'func-auth',
+      func,
+      auth,
+      skipWait: params.skipWait === true,
+      fundRelayerId: parseFundRelayerId(params),
+    };
   }
 
   throw pluginError('Must pass either `xdr` or `func` and `auth`', {

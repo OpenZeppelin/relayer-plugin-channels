@@ -48,6 +48,8 @@ export interface ChannelsXdrRequest {
   xdr: string;
   /** When true, returns immediately after submission without waiting for confirmation */
   skipWait?: boolean;
+  /** Alternative fund relayer ID for fee bumping (must be in the allowed list) */
+  fundRelayerId?: string;
 }
 
 /**
@@ -60,6 +62,8 @@ export interface ChannelsFuncAuthRequest {
   auth: string[];
   /** When true, returns immediately after submission without waiting for confirmation */
   skipWait?: boolean;
+  /** Alternative fund relayer ID for fee bumping (must be in the allowed list) */
+  fundRelayerId?: string;
 }
 
 /**
