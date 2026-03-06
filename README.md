@@ -332,7 +332,8 @@ Every allowed alternative fund relayer must reference a relayer configured in yo
   "network_type": "stellar",
   "signer_id": "x402-fund-signer",
   "policies": {
-    "concurrent_transactions": true
+    "concurrent_transactions": true,
+    "fee_payment_strategy": "relayer"
   }
 }
 ```
