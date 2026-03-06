@@ -12,15 +12,15 @@
 import type { xdr } from '@stellar/stellar-sdk';
 
 export type ChannelAccountsRequest =
-  | { type: 'xdr'; xdr: string; skipWait: boolean; x402: boolean }
+  | { type: 'xdr'; xdr: string; skipWait: boolean; fundRelayerId?: string }
   | {
       type: 'func-auth';
       func: xdr.HostFunction;
       auth: xdr.SorobanAuthorizationEntry[];
       skipWait: boolean;
-      x402: boolean;
+      fundRelayerId?: string;
     }
-  | { type: 'get-transaction'; transactionId: string; x402: boolean };
+  | { type: 'get-transaction'; transactionId: string; fundRelayerId?: string };
 
 /**
  * Plugin response format aligned with launchtube

@@ -21,6 +21,13 @@ describe('config', () => {
     const cfg = loadConfig();
     expect(cfg.network).toBe('testnet');
     expect(cfg.fundRelayerId).toBe('fund-relayer');
+    expect(cfg.allowedFundRelayerIds.size).toBe(0);
+  });
+
+  test('allowed fund relayer ids parses comma-separated values', () => {
+    process.env.ALLOWED_FUND_RELAYER_IDS = 'x402-fund, alt-fund ';
+    const cfg = loadConfig();
+    expect(cfg.allowedFundRelayerIds).toEqual(new Set(['x402-fund', 'alt-fund']));
   });
 
   test('network passphrase', () => {

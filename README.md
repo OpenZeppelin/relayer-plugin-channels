@@ -222,7 +222,8 @@ export FUND_RELAYER_ID="channels-fund"
 export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 
 # Optional environment variables
-export X402_FUND_RELAYER_ID="x402-channels-fund" # Separate fund relayer for x402 requests (disabled if not set)
+# Comma-separated list of allowed alternative fund relayers (e.g., for x402 or similar flows)
+export ALLOWED_FUND_RELAYER_IDS="x402-channels-fund" 
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 
 # Fee tracking (optional)
@@ -310,18 +311,17 @@ The Channels plugin accepts Soroban operations and handles all the complexity of
 - **Channel Accounts**: Provide unique sequence numbers for parallel transaction submission
 - The channel account is the transaction source and signer; the fund account wraps it in a fee bump
 
-## x402 Fund Relayer
+## Alternative Fund Relayers
 
-The plugin supports an optional secondary fund relayer for [x402](https://www.x402.org/) payment flows. When a request includes `x402: true`, the plugin uses a separate fund account to pay for fee bumps, keeping x402-funded transactions isolated from the primary fund account.
+The plugin supports optional secondary fund relayers for [x402](https://www.x402.org/) and similar payment flows. Pass `fundRelayerId` in the request and allowlist that ID through `ALLOWED_FUND_RELAYER_IDS`.
 
 ### Configuration
 
 ```bash
-# Optional: separate fund relayer for x402 requests
-export X402_FUND_RELAYER_ID="x402-fund"
+export ALLOWED_FUND_RELAYER_IDS="x402-fund"
 ```
 
-The `X402_FUND_RELAYER_ID` must reference a relayer configured in your Relayer's `config.json`, just like the primary fund account. Add it alongside your existing relayers:
+Every allowed alternative fund relayer must reference a relayer configured in your Relayer's `config.json`, just like the primary fund account. Add it alongside your existing relayers:
 
 ```json
 {
@@ -337,9 +337,9 @@ The `X402_FUND_RELAYER_ID` must reference a relayer configured in your Relayer's
 }
 ```
 
-### Usage
+### Preferred usage
 
-Pass `x402: true` in any `xdr` or `func`+`auth` request to route fee bumping through the x402 fund relayer:
+Pass `fundRelayerId` in any `xdr` or `func`+`auth` request to route fee bumping through the specified fund relayer:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
@@ -348,7 +348,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   -d '{
     "params": {
       "xdr": "AAAAAgAAAAB...",
-      "x402": true
+      "fundRelayerId": "x402-fund"
     }
   }'
 ```
@@ -363,17 +363,17 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
     "params": {
       "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
       "auth": ["AAAACAAAAAEAAAA..."],
-      "x402": true
+      "fundRelayerId": "x402-fund"
     }
   }'
 ```
 
 ### Notes
 
-- If `x402: true` is sent but `X402_FUND_RELAYER_ID` is not configured, the plugin returns a `CONFIG_MISSING` error
-- When `x402` is `false` or omitted, the primary `FUND_RELAYER_ID` is always used, even if `X402_FUND_RELAYER_ID` is configured
-- `x402` must be a boolean — non-boolean values (e.g., `"true"`, `1`) are rejected
-- `getTransaction` requests can also include `x402: true`, when present, polling uses `X402_FUND_RELAYER_ID` and should match the relayer used for submission
+- If `fundRelayerId` is provided but not listed in `ALLOWED_FUND_RELAYER_IDS`, the plugin rejects the request
+- When `fundRelayerId` is omitted, the primary `FUND_RELAYER_ID` is used
+- `fundRelayerId` must be a non-empty string
+- `getTransaction` requests can also include `fundRelayerId`; polling should use the same relayer selection as submission
 
 ## Contract Capacity Limits
 
@@ -738,20 +738,20 @@ const result = await client.submitSorobanTransaction({
 console.log(result.hash);
 ```
 
-#### Submit with x402 Fund Relayer
+#### Submit with Alternative Fund Relayer
 
 ```typescript
-// Submit using the x402 fund relayer for fee bumping
+// Submit using an alternative fund relayer for fee bumping
 const result = await client.submitTransaction({
   xdr: 'AAAAAgAAAAC...', // Complete transaction envelope XDR
-  x402: true,
+  fundRelayerId: 'x402-fund',
 });
 
 // Also works with func+auth
 const result2 = await client.submitSorobanTransaction({
   func: 'AAAABAAAAAEAAAAGc3ltYm9s...',
   auth: ['AAAACAAAAAEAAAA...'],
-  x402: true,
+  fundRelayerId: 'x402-fund',
 });
 ```
 
@@ -951,7 +951,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - `func` (string): Soroban host function XDR (base64)
 - `auth` (array): Array of Soroban authorization entry XDRs (base64)
 - `skipWait` (boolean, optional): When `true`, returns immediately after submitting the transaction without waiting for confirmation. Defaults to `false`. Must be a boolean — non-boolean values (e.g., `"false"`, `1`) are rejected.
-- `x402` (boolean, optional): When `true`, uses the x402 fund relayer (`X402_FUND_RELAYER_ID`) for fee bumping instead of the primary fund account. Defaults to `false`. Must be a boolean — non-boolean values are rejected. Requires `X402_FUND_RELAYER_ID` to be configured.
+- `fundRelayerId` (string, optional): Uses the specified alternative fund relayer for fee bumping instead of the primary fund account. Must be present in `ALLOWED_FUND_RELAYER_IDS`.
 - `getTransaction` (object, optional): Poll for a transaction's status by ID. Cannot be combined with other parameters.
 
 **Note**: Provide either `xdr` OR `func`+`auth` OR `getTransaction`, not a combination.

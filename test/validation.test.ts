@@ -5,7 +5,7 @@ import { validateAndParseRequest } from '../src/plugin/validation';
 describe('validation', () => {
   test('accepts xdr-only request', () => {
     const out = validateAndParseRequest({ xdr: 'BASE64XDR' });
-    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: false, x402: false });
+    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: false, fundRelayerId: undefined });
   });
 
   test('rejects xdr with extra keys', () => {
@@ -27,7 +27,7 @@ describe('validation', () => {
 
   test('accepts xdr with skipWait without unknown-key error', () => {
     const out = validateAndParseRequest({ xdr: 'BASE64XDR', skipWait: true });
-    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: true, x402: false });
+    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: true, fundRelayerId: undefined });
   });
 
   test('parses skipWait as boolean in func+auth', () => {
@@ -66,22 +66,22 @@ describe('validation', () => {
 
   test('accepts getTransaction request', () => {
     const out = validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' } });
-    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1', x402: false });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1', fundRelayerId: undefined });
   });
 
   test('trims getTransaction transactionId', () => {
     const out = validateAndParseRequest({ getTransaction: { transactionId: '  tx-2  ' } });
-    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-2', x402: false });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-2', fundRelayerId: undefined });
   });
 
-  test('accepts getTransaction with x402 flag', () => {
-    const out = validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, x402: true });
-    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1', x402: true });
+  test('accepts getTransaction with fundRelayerId', () => {
+    const out = validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, fundRelayerId: 'x402-fund' });
+    expect(out).toEqual({ type: 'get-transaction', transactionId: 'tx-1', fundRelayerId: 'x402-fund' });
   });
 
-  test('rejects getTransaction with non-boolean x402', () => {
-    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, x402: 'yes' })).toThrow(
-      '`x402` must be a boolean'
+  test('rejects getTransaction with non-string fundRelayerId', () => {
+    expect(() => validateAndParseRequest({ getTransaction: { transactionId: 'tx-1' }, fundRelayerId: true })).toThrow(
+      '`fundRelayerId` must be a non-empty string'
     );
   });
 
@@ -115,41 +115,56 @@ describe('validation', () => {
     );
   });
 
-  test('accepts x402 as boolean in xdr request', () => {
-    const out = validateAndParseRequest({ xdr: 'BASE64XDR', x402: true });
-    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: false, x402: true });
+  test('accepts fundRelayerId as string in xdr request', () => {
+    const out = validateAndParseRequest({ xdr: 'BASE64XDR', fundRelayerId: 'x402-fund' });
+    expect(out).toEqual({ type: 'xdr', xdr: 'BASE64XDR', skipWait: false, fundRelayerId: 'x402-fund' });
   });
 
-  test('x402 defaults to false in xdr request', () => {
+  test('fundRelayerId defaults to undefined in xdr request', () => {
     const out = validateAndParseRequest({ xdr: 'BASE64XDR' });
-    expect((out as any).x402).toBe(false);
+    expect((out as any).fundRelayerId).toBeUndefined();
   });
 
-  test('rejects non-boolean x402 in xdr request', () => {
-    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', x402: 'true' })).toThrow('`x402` must be a boolean');
-    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', x402: 1 })).toThrow('`x402` must be a boolean');
+  test('rejects non-string fundRelayerId in xdr request', () => {
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', fundRelayerId: true })).toThrow(
+      '`fundRelayerId` must be a non-empty string'
+    );
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', fundRelayerId: 1 })).toThrow(
+      '`fundRelayerId` must be a non-empty string'
+    );
   });
 
-  test('accepts x402 as boolean in func+auth request', () => {
+  test('rejects empty string fundRelayerId in xdr request', () => {
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', fundRelayerId: '' })).toThrow(
+      '`fundRelayerId` must be a non-empty string'
+    );
+    expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', fundRelayerId: '  ' })).toThrow(
+      '`fundRelayerId` must be a non-empty string'
+    );
+  });
+
+  test('accepts fundRelayerId as string in func+auth request', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
     const body = op.body();
     const inv = body.invokeHostFunctionOp();
     const func = inv.hostFunction().toXDR('base64');
     const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
-    const out = validateAndParseRequest({ func, auth, x402: true });
+    const out = validateAndParseRequest({ func, auth, fundRelayerId: 'x402-fund' });
     expect(out.type).toBe('func-auth');
-    expect((out as any).x402).toBe(true);
+    expect((out as any).fundRelayerId).toBe('x402-fund');
   });
 
-  test('rejects non-boolean x402 in func+auth request', () => {
+  test('rejects non-string fundRelayerId in func+auth request', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
     const body = op.body();
     const inv = body.invokeHostFunctionOp();
     const func = inv.hostFunction().toXDR('base64');
     const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
-    expect(() => validateAndParseRequest({ func, auth, x402: 'yes' })).toThrow('`x402` must be a boolean');
+    expect(() => validateAndParseRequest({ func, auth, fundRelayerId: 123 })).toThrow(
+      '`fundRelayerId` must be a non-empty string'
+    );
   });
 
   test('rejects missing both', () => {

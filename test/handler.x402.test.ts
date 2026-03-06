@@ -1,5 +1,5 @@
 /**
- * Tests for x402 fund relayer selection in the handler.
+ * Tests for alternative fund relayer selection in the handler.
  */
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import type { PluginContext, PluginAPI } from '@openzeppelin/relayer-sdk';
@@ -9,6 +9,7 @@ import { FakeKV } from './helpers/fakeKV';
 let configOverride: Record<string, any> = {};
 const baseConfig = {
   fundRelayerId: 'fund-1',
+  allowedFundRelayerIds: new Set<string>(),
   network: 'testnet',
   lockTtlSeconds: 30,
   apiKeyHeader: 'x-api-key',
@@ -35,7 +36,7 @@ let mockValidateResult: any = {
   type: 'xdr' as const,
   xdr: 'SIGNED_XDR',
   skipWait: false,
-  x402: false,
+  fundRelayerId: undefined,
 };
 vi.mock('../src/plugin/validation', () => ({
   validateAndParseRequest: vi.fn().mockImplementation(() => ({ ...mockValidateResult })),
@@ -116,7 +117,7 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
 
 import { handler } from '../src/plugin/handler';
 
-describe('x402 fund relayer selection', () => {
+describe('alternative fund relayer selection', () => {
   let kv: FakeKV;
   let useRelayerMock: ReturnType<typeof vi.fn>;
 
@@ -154,21 +155,21 @@ describe('x402 fund relayer selection', () => {
       type: 'xdr' as const,
       xdr: 'SIGNED_XDR',
       skipWait: false,
-      x402: false,
+      fundRelayerId: undefined,
     };
     vi.clearAllMocks();
   });
 
-  test('uses default fund relayer when x402 is false', async () => {
+  test('uses default fund relayer when no fundRelayerId specified', async () => {
     const ctx = makeContext();
     await handler(ctx);
 
     expect(useRelayerMock).toHaveBeenCalledWith('fund-1');
   });
 
-  test('uses x402 fund relayer when x402 is true and configured', async () => {
-    configOverride = { x402FundRelayerId: 'x402-fund-1' };
-    mockValidateResult = { ...mockValidateResult, x402: true };
+  test('uses specified fund relayer when fundRelayerId is in allowed list', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
 
     const ctx = makeContext();
     await handler(ctx);
@@ -176,8 +177,8 @@ describe('x402 fund relayer selection', () => {
     expect(useRelayerMock).toHaveBeenCalledWith('x402-fund-1');
   });
 
-  test('throws CONFIG_MISSING when x402 is true but not configured', async () => {
-    mockValidateResult = { ...mockValidateResult, x402: true };
+  test('throws CONFIG_MISSING when fundRelayerId is not in allowed list', async () => {
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
 
     const ctx = makeContext();
     await expect(handler(ctx)).rejects.toMatchObject({
@@ -185,9 +186,9 @@ describe('x402 fund relayer selection', () => {
     });
   });
 
-  test('uses default fund relayer when x402 is false even if x402FundRelayerId is configured', async () => {
-    configOverride = { x402FundRelayerId: 'x402-fund-1' };
-    mockValidateResult = { ...mockValidateResult, x402: false };
+  test('uses default fund relayer when fundRelayerId is undefined even if allowed list configured', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: undefined };
 
     const ctx = makeContext();
     await handler(ctx);
@@ -195,12 +196,12 @@ describe('x402 fund relayer selection', () => {
     expect(useRelayerMock).toHaveBeenCalledWith('fund-1');
   });
 
-  test('uses default fund relayer for get-transaction when x402 is false', async () => {
-    configOverride = { x402FundRelayerId: 'x402-fund-1' };
+  test('uses default fund relayer for get-transaction when no fundRelayerId', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
     mockValidateResult = {
       type: 'get-transaction' as const,
       transactionId: 'tx-123',
-      x402: false,
+      fundRelayerId: undefined,
     };
 
     const ctx = makeContext();
@@ -209,12 +210,12 @@ describe('x402 fund relayer selection', () => {
     expect(useRelayerMock).toHaveBeenCalledWith('fund-1');
   });
 
-  test('uses x402 fund relayer for get-transaction when x402 is true', async () => {
-    configOverride = { x402FundRelayerId: 'x402-fund-1' };
+  test('uses specified fund relayer for get-transaction when fundRelayerId is allowed', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
     mockValidateResult = {
       type: 'get-transaction' as const,
       transactionId: 'tx-123',
-      x402: true,
+      fundRelayerId: 'x402-fund-1',
     };
 
     const ctx = makeContext();

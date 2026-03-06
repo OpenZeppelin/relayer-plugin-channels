@@ -14,7 +14,8 @@ const DEFAULT_INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1; // 201
 
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
-  x402FundRelayerId?: string;
+  /** Map of allowed alternative fund relayer IDs (e.g. { "x402-channels-fund": true }) */
+  allowedFundRelayerIds: Set<string>;
   network: 'testnet' | 'mainnet';
   lockTtlSeconds: number;
   adminSecret?: string;
@@ -123,6 +124,18 @@ function parseSequenceNumberCacheMaxAge(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
 }
 
+function parseAllowedFundRelayerIds(): Set<string> {
+  const ids = new Set<string>();
+  const raw = process.env.ALLOWED_FUND_RELAYER_IDS;
+  if (raw) {
+    for (const id of raw.split(',')) {
+      const trimmed = id.trim();
+      if (trimmed.length > 0) ids.add(trimmed);
+    }
+  }
+  return ids;
+}
+
 function parseContractCapacityRatio(): number {
   const raw = process.env.CONTRACT_CAPACITY_RATIO;
   if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
@@ -145,9 +158,11 @@ export function loadConfig(): ChannelAccountsConfig {
     });
   }
 
+  const allowedFundRelayerIds = parseAllowedFundRelayerIds();
+
   return {
     fundRelayerId: requireEnv('FUND_RELAYER_ID'),
-    x402FundRelayerId: parseOptionalString('X402_FUND_RELAYER_ID'),
+    allowedFundRelayerIds,
     network: networkRaw as 'testnet' | 'mainnet',
     lockTtlSeconds: parseLockTtl(),
     adminSecret: parseOptionalString('PLUGIN_ADMIN_SECRET'),

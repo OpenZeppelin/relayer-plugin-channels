@@ -272,22 +272,24 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     });
   }
 
-  // 1. Validate and parse request (xdr OR func+auth)
+  // Validate and parse request (xdr OR func+auth)
   const request = validateAndParseRequest(params);
   console.debug(
     `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
   );
 
-  // 2. Get fund relayer (use x402-specific fund relayer when requested)
-  const isX402 = request.x402 === true;
-  if (isX402 && !config.x402FundRelayerId) {
-    throw pluginError('x402 fund relayer not configured', {
-      code: 'CONFIG_MISSING',
-      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-      details: { name: 'X402_FUND_RELAYER_ID' },
-    });
+  // Get fund relayer (use alternative fund relayer when requested)
+  let fundRelayerId = config.fundRelayerId;
+  if (request.fundRelayerId) {
+    if (!config.allowedFundRelayerIds.has(request.fundRelayerId)) {
+      throw pluginError(`Fund relayer '${request.fundRelayerId}' is not in the allowed list`, {
+        code: 'CONFIG_MISSING',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { fundRelayerId: request.fundRelayerId },
+      });
+    }
+    fundRelayerId = request.fundRelayerId;
   }
-  const fundRelayerId = isX402 && config.x402FundRelayerId ? config.x402FundRelayerId : config.fundRelayerId;
   const fundRelayer = api.useRelayer(fundRelayerId);
 
   // 2a. Handle get-transaction early — no pool, channel, or simulation needed
