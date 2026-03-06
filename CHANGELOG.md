@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.17.0
+
+### Minor Changes
+
+- 493d67e: feat: Add new channel fund for x402 payments (#103)
+
 ## 0.16.0
 
 ### Minor Changes
