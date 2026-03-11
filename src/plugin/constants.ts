@@ -35,6 +35,10 @@ export const POOL = {
   MUTEX_MAX_SPINS: 30,
   MUTEX_RETRY_MIN_MS: 10,
   MUTEX_RETRY_MAX_MS: 30,
+  // Hard-block cooldown for uncertain-outcome channels (~1 Stellar ledger with margin)
+  CHANNEL_COOLDOWN_MS: 6_000,
+  // Housekeeping TTL for the single LRU map document
+  LRU_MAP_TTL_SECONDS: 86_400,
 } as const;
 
 // Time Constants

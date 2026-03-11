@@ -87,6 +87,75 @@ describe('ChannelPool', () => {
     await expect(pool.extendLock({ relayerId: 'p1', token: 'tok' })).resolves.toBeUndefined();
   });
 
+  test('LRU ordering: channels acquired longer ago are acquired first', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2', 'p3'] });
+
+    const now = Date.now();
+    await kv.set('testnet:channel:lru-map', {
+      p1: now,
+      p2: now - 10000,
+      p3: now - 5000,
+    });
+
+    const lock = await pool.acquire(defaultOptions);
+    expect(lock.relayerId).toBe('p2');
+  });
+
+  test('never-used channels are preferred (missing from LRU map defaults to 0)', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
+
+    await kv.set('testnet:channel:lru-map', { p1: Date.now() - 10000 });
+
+    const lock = await pool.acquire(defaultOptions);
+    expect(lock.relayerId).toBe('p2');
+  });
+
+  test('acquire updates LRU map with acquisition timestamp', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
+
+    const before = Date.now();
+    const lock = await pool.acquire(defaultOptions);
+    const lruMap = await kv.get<Record<string, number>>('testnet:channel:lru-map');
+    expect(lruMap).not.toBeNull();
+    expect(lruMap![lock.relayerId]).toBeGreaterThanOrEqual(before);
+  });
+
+  test('releaseWithCooldown keeps lock key alive with short TTL', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
+
+    const lock = await pool.acquire(defaultOptions);
+    await pool.releaseWithCooldown(lock, 6000);
+
+    // Lock key should still exist (channel blocked during cooldown)
+    const exists = await kv.exists(`testnet:channel:in-use:${lock.relayerId}`);
+    expect(exists).toBe(true);
+  });
+
+  test('releaseWithCooldown is no-op if token does not match', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
+
+    const lock = await pool.acquire(defaultOptions);
+    const wrongLock = { relayerId: lock.relayerId, token: 'wrong-token' };
+
+    const setSpy = vi.spyOn(kv, 'set');
+    await pool.releaseWithCooldown(wrongLock, 6000);
+
+    const cooldownCalls = setSpy.mock.calls.filter(
+      (c) => c[0] === `testnet:channel:in-use:${lock.relayerId}`
+    );
+    expect(cooldownCalls).toHaveLength(0);
+  });
+
   test('limited-contract exhaustion reports limited capacity diagnostics', async () => {
     const kv = new FakeKV();
     const pool = new ChannelPool('testnet', kv as any, 30);

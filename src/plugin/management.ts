@@ -198,12 +198,8 @@ async function setChannelAccounts(kv: PluginKVStore, network: 'testnet' | 'mainn
 
   // Check for locked removals
   const removals = current.filter((id) => !relayerIds.includes(id));
-  const locked: string[] = [];
-  for (const id of removals) {
-    if (await isRelayerIdLocked(kv, network, id)) {
-      locked.push(id);
-    }
-  }
+  const lockedSet = await getLockedRelayerIds(kv, network);
+  const locked = removals.filter((id) => lockedSet.has(id));
   if (locked.length > 0) {
     throw pluginError('Locked relayer IDs cannot be removed', {
       code: 'LOCKED_CONFLICT',
@@ -240,12 +236,12 @@ async function getPoolStats(config: ChannelAccountsConfig, kv: PluginKVStore): P
     });
   }
 
-  // 2. Check all locks in parallel (N KV calls) — best-effort
+  // 2. Check locks via single listKeys scan — best-effort
   let locked: number | undefined;
   let available: number | undefined;
   try {
-    const results = await Promise.all(relayerIds.map((id) => kv.exists(`${network}:channel:in-use:${id}`)));
-    locked = results.filter(Boolean).length;
+    const lockedSet = await getLockedRelayerIds(kv, network);
+    locked = relayerIds.filter((id) => lockedSet.has(id)).length;
     available = relayerIds.length - locked;
   } catch {
     // Non-fatal: return pool size without lock info
@@ -299,15 +295,16 @@ async function readStoredRelayerIds(kv: PluginKVStore, key: string): Promise<str
   }
 }
 
-async function isRelayerIdLocked(kv: PluginKVStore, network: 'testnet' | 'mainnet', id: string): Promise<boolean> {
-  const key = `${network}:channel:in-use:${id}`;
+async function getLockedRelayerIds(kv: PluginKVStore, network: 'testnet' | 'mainnet'): Promise<Set<string>> {
+  const prefix = `${network}:channel:in-use:`;
   try {
-    return await kv.exists(key);
+    const keys = await kv.listKeys(`${prefix}*`);
+    return new Set(keys.map((k) => k.slice(prefix.length)));
   } catch (error) {
-    throw pluginError('KV error while checking relayer lock', {
+    throw pluginError('KV error while checking relayer locks', {
       code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-      details: { relayerId: id, key, message: error instanceof Error ? error.message : String(error) },
+      details: { message: error instanceof Error ? error.message : String(error) },
     });
   }
 }

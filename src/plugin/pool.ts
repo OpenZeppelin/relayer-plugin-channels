@@ -72,7 +72,7 @@ export class ChannelPool {
     return this.kv.withLock(this.globalLockKey, fn, { ttlSec: this.mutexTtlSec, onBusy: 'skip' });
   }
 
-  // Inside the mutex: pick an available relayer and set its channel lock
+  // Inside the mutex: pick an available relayer and set its channel lock (LRU ordering)
   private async tryLockAnyRelayer(options: AcquireOptions): Promise<PoolLock | null> {
     let ids = await this.getRelayerIdsFromKV();
     if (ids.length === 0) {
@@ -82,22 +82,41 @@ export class ChannelPool {
       });
     }
 
-    // If contract is limited, filter to allowed subset
     if (options.contractId && options.limitedContracts.has(options.contractId)) {
       ids = filterChannelsForLimitedContract(ids, options.capacityRatio);
     }
 
-    shuffle(ids);
-    for (const relayerId of ids) {
-      const key = this.lockKey(relayerId);
-      const exists = await this.kv.exists(key);
-      if (exists) continue;
-      const token = randomToken();
-      const entry = { token, lockedAt: new Date().toISOString() };
-      await this.kv.set(key, entry, { ttlSec: this.channelLockTtlSec });
-      return { relayerId, token };
+    const lockPrefix = this.lockKeyPrefix();
+    const [lockedKeys, lruMapRaw] = await Promise.all([
+      this.kv.listKeys(`${lockPrefix}*`),
+      this.kv.get<Record<string, number>>(this.lruMapKey()),
+    ]);
+    const lruMap = lruMapRaw ?? {};
+    const lockedSet = new Set(lockedKeys.map(k => k.slice(lockPrefix.length)));
+
+    const unlocked = ids.filter(id => !lockedSet.has(id));
+    if (unlocked.length === 0) return null;
+
+    // Shuffle for tie-breaking, then stable-sort by lastUsedAt ascending (LRU first)
+    shuffle(unlocked);
+    unlocked.sort((a, b) => (lruMap[a] ?? 0) - (lruMap[b] ?? 0));
+
+    const pick = unlocked[0];
+    const token = randomToken();
+    await this.kv.set(
+      this.lockKey(pick),
+      { token, lockedAt: new Date().toISOString() },
+      { ttlSec: this.channelLockTtlSec }
+    );
+
+    lruMap[pick] = Date.now();
+    try {
+      await this.kv.set(this.lruMapKey(), lruMap, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
+    } catch {
+      // Best-effort: stale LRU map only affects ordering, not correctness
     }
-    return null;
+
+    return { relayerId: pick, token };
   }
 
   /** Extend the lock TTL if we still own it (e.g. after WAIT_TIMEOUT) */
@@ -130,12 +149,34 @@ export class ChannelPool {
     }
   }
 
+  /** Release with cooldown: keeps lock alive with short TTL to hard-block the channel. */
+  async releaseWithCooldown(lock: PoolLock, cooldownMs = POOL.CHANNEL_COOLDOWN_MS): Promise<void> {
+    try {
+      const key = this.lockKey(lock.relayerId);
+      const current = await this.kv.get<{ token?: string }>(key);
+      if (current?.token === lock.token) {
+        const cooldownSec = Math.max(1, Math.ceil(cooldownMs / 1000));
+        await this.kv.set(key, current, { ttlSec: cooldownSec });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   private membershipKey(): string {
     return `${this.network}:channel:relayer-ids`;
   }
 
+  private lockKeyPrefix(): string {
+    return `${this.network}:channel:in-use:`;
+  }
+
   private lockKey(relayerId: string): string {
-    return `${this.network}:channel:in-use:${relayerId}`;
+    return `${this.lockKeyPrefix()}${relayerId}`;
+  }
+
+  private lruMapKey(): string {
+    return `${this.network}:channel:lru-map`;
   }
 
   private async getRelayerIdsFromKV(): Promise<string[]> {

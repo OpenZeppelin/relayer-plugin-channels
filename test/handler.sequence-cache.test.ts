@@ -27,12 +27,14 @@ const poolSpies = {
   acquire: vi.fn().mockResolvedValue({ relayerId: 'channel-1', token: 'tok' }),
   release: vi.fn().mockResolvedValue(undefined),
   extendLock: vi.fn().mockResolvedValue(undefined),
+  releaseWithCooldown: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock('../src/plugin/pool', () => {
   class MockChannelPool {
     acquire = poolSpies.acquire;
     release = poolSpies.release;
     extendLock = poolSpies.extendLock;
+    releaseWithCooldown = poolSpies.releaseWithCooldown;
   }
   return { ChannelPool: MockChannelPool };
 });
@@ -261,7 +263,7 @@ describe('handler sequence cache lifecycle', () => {
     expect(poolSpies.release).not.toHaveBeenCalled();
   });
 
-  test('releases lock normally on non-timeout errors', async () => {
+  test('releases lock normally on ONCHAIN_FAILED errors', async () => {
     const err = new Error('TxFailed') as any;
     err.code = 'ONCHAIN_FAILED';
     mockSubmit.mockRejectedValue(err);
@@ -270,6 +272,7 @@ describe('handler sequence cache lifecycle', () => {
     await expect(handler(ctx)).rejects.toMatchObject({ code: 'ONCHAIN_FAILED' });
 
     expect(poolSpies.extendLock).not.toHaveBeenCalled();
+    expect(poolSpies.releaseWithCooldown).not.toHaveBeenCalled();
     expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
   });
 

@@ -54,8 +54,19 @@ export class FakeKV implements PluginKVStore {
     }
   }
 
-  async listKeys(_pattern?: string): Promise<string[]> {
-    return Array.from(this.store.keys());
+  async listKeys(pattern?: string): Promise<string[]> {
+    const now = Date.now();
+    const prefix = pattern?.endsWith('*') ? pattern.slice(0, -1) : undefined;
+    const keys: string[] = [];
+    for (const [key, entry] of this.store) {
+      if (entry.expiresAt && entry.expiresAt <= now) {
+        this.store.delete(key);
+        continue;
+      }
+      if (prefix && !key.startsWith(prefix)) continue;
+      keys.push(key);
+    }
+    return keys;
   }
 
   async clear(): Promise<number> {
