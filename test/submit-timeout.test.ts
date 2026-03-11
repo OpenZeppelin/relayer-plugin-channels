@@ -38,12 +38,12 @@ describe('submitWithFeeBumpAndWait dynamic timeout', () => {
     const opts = transactionWait.mock.calls[0][1];
     expect(opts.interval).toBe(POLLING.INTERVAL_MS);
     // With 5s elapsed: remaining = 30000 - 2000 - 5000 = 23000, capped at 25000 → 23000
-    expect(opts.timeout).toBeLessThanOrEqual(POLLING.TIMEOUT_MS);
+    expect(opts.timeout).toBeLessThanOrEqual(POLLING.DEFAULT_TIMEOUT_MS);
     expect(opts.timeout).toBeGreaterThan(0);
-    expect(opts.timeout).toBeLessThan(POLLING.TIMEOUT_MS);
+    expect(opts.timeout).toBeLessThan(POLLING.DEFAULT_TIMEOUT_MS);
   });
 
-  test('caps timeout at POLLING.TIMEOUT_MS when plenty of time remains', async () => {
+  test('caps timeout at POLLING.DEFAULT_TIMEOUT_MS when plenty of time remains', async () => {
     const { fundRelayer, api, transactionWait } = makeMocks();
     // Simulate 0s elapsed (just started)
     const startTime = Date.now();
@@ -52,7 +52,7 @@ describe('submitWithFeeBumpAndWait dynamic timeout', () => {
 
     const opts = transactionWait.mock.calls[0][1];
     // remaining = 30000 - 2000 - ~0 = ~28000, capped at 25000
-    expect(opts.timeout).toBe(POLLING.TIMEOUT_MS);
+    expect(opts.timeout).toBe(POLLING.DEFAULT_TIMEOUT_MS);
   });
 
   test('throws immediately when no time remaining', async () => {
@@ -71,7 +71,7 @@ describe('submitWithFeeBumpAndWait dynamic timeout', () => {
   test('throws when elapsed exactly equals budget', async () => {
     const { fundRelayer, api, transactionWait } = makeMocks();
     // Elapsed = GLOBAL - BUFFER = 28s exactly → remaining = 0
-    const startTime = Date.now() - (TIMEOUT.GLOBAL_TIMEOUT_MS - TIMEOUT.BUFFER_MS);
+    const startTime = Date.now() - (TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS - TIMEOUT.BUFFER_MS);
 
     await expect(submitWithFeeBumpAndWait(fundRelayer, 'xdr', 'testnet', 1000, api, startTime)).rejects.toMatchObject({
       code: 'WAIT_TIMEOUT',

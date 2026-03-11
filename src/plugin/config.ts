@@ -6,7 +6,7 @@
 
 import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, CONFIG } from './constants';
+import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING } from './constants';
 
 // Default inclusion fees (matching launchtube)
 const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + 3; // 203
@@ -28,6 +28,8 @@ export interface ChannelAccountsConfig {
   inclusionFeeLimited: number;
   sequenceNumberCacheMaxAgeMs: number;
   minSignatureExpirationLedgerBuffer: number;
+  globalTimeoutMs: number;
+  pollingTimeoutMs: number;
 }
 
 function requireEnv(name: string): string {
@@ -136,6 +138,20 @@ function parseAllowedFundRelayerIds(): Set<string> {
   return ids;
 }
 
+function parseGlobalTimeoutMs(): number {
+  const raw = process.env.PLUGIN_GLOBAL_TIMEOUT_MS;
+  if (!raw) return TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS;
+}
+
+function parsePollingTimeoutMs(): number {
+  const raw = process.env.PLUGIN_POLLING_TIMEOUT_MS;
+  if (!raw) return POLLING.DEFAULT_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : POLLING.DEFAULT_TIMEOUT_MS;
+}
+
 function parseContractCapacityRatio(): number {
   const raw = process.env.CONTRACT_CAPACITY_RATIO;
   if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
@@ -175,6 +191,8 @@ export function loadConfig(): ChannelAccountsConfig {
     inclusionFeeLimited: parseInclusionFee('INCLUSION_FEE_LIMITED', DEFAULT_INCLUSION_FEE_LIMITED),
     sequenceNumberCacheMaxAgeMs: parseSequenceNumberCacheMaxAge(),
     minSignatureExpirationLedgerBuffer: parseMinAuthExpiryLedgerBuffer(),
+    globalTimeoutMs: parseGlobalTimeoutMs(),
+    pollingTimeoutMs: parsePollingTimeoutMs(),
   };
 }
 

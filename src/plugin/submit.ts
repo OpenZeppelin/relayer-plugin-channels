@@ -13,6 +13,7 @@ import {
   PluginAPI,
 } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS, TIMEOUT, POLLING } from './constants';
+import { ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { FeeTracker } from './fee-tracking';
 
@@ -76,7 +77,8 @@ export async function submitWithFeeBumpAndWait(
   startTime: number,
   tracker?: FeeTracker,
   context?: SubmitContext,
-  skipWait?: boolean
+  skipWait?: boolean,
+  config?: Pick<ChannelAccountsConfig, 'globalTimeoutMs' | 'pollingTimeoutMs'>
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
   console.debug(`[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`);
@@ -103,8 +105,10 @@ export async function submitWithFeeBumpAndWait(
   }
 
   // Compute dynamic timeout from remaining global budget
+  const globalTimeout = config?.globalTimeoutMs ?? TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS;
+  const pollingTimeout = config?.pollingTimeoutMs ?? POLLING.DEFAULT_TIMEOUT_MS;
   const elapsedMs = Date.now() - startTime;
-  const remainingMs = TIMEOUT.GLOBAL_TIMEOUT_MS - TIMEOUT.BUFFER_MS - elapsedMs;
+  const remainingMs = globalTimeout - TIMEOUT.BUFFER_MS - elapsedMs;
   if (remainingMs <= 0) {
     throw pluginError('No time remaining for transaction wait', {
       code: 'WAIT_TIMEOUT',
@@ -116,7 +120,7 @@ export async function submitWithFeeBumpAndWait(
       },
     });
   }
-  const timeout = Math.min(remainingMs, POLLING.TIMEOUT_MS);
+  const timeout = Math.min(remainingMs, pollingTimeout);
   console.debug(`[channels] Transaction wait: elapsed=${elapsedMs}ms, timeout=${timeout}ms`);
 
   // Wait for confirmation
