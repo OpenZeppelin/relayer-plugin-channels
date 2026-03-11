@@ -4,7 +4,7 @@
  * KV-backed, stateless channel pool.
  * - Membership comes from KV: <network>:channel:relayer-ids
  * - Per-relayer locks with tokens: <network>:channel:in-use:<relayerId>
- * - Uses a short global mutex to make acquire atomic across workers.
+ * - Uses per-channel claim locks to make acquire safe across workers.
  */
 
 import { PluginKVStore, pluginError } from '@openzeppelin/relayer-sdk';
@@ -29,32 +29,27 @@ type PoolCapacityDetails = {
 
 export class ChannelPool {
   private readonly network: 'testnet' | 'mainnet';
-  private readonly globalLockKey: string;
   private readonly channelLockTtlSec: number;
-  private readonly mutexTtlSec: number;
   private readonly kv: PluginKVStore;
 
   constructor(network: 'testnet' | 'mainnet', kv: PluginKVStore, lockTtlSeconds: number) {
     this.network = network;
     this.kv = kv;
-    this.globalLockKey = `${this.network}:channel-pool-lock`;
     this.channelLockTtlSec = lockTtlSeconds;
-    this.mutexTtlSec = POOL.MUTEX_TTL_SECONDS;
   }
 
   /** Acquire a relayerId with a token lock */
   async acquire(options: AcquireOptions): Promise<PoolLock> {
-    const maxSpins = POOL.MUTEX_MAX_SPINS;
+    const maxSpins = POOL.ACQUIRE_MAX_SPINS;
 
     for (let i = 0; i < maxSpins; i++) {
-      const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer(options));
-      if (r === null) {
-        const jitter =
-          POOL.MUTEX_RETRY_MIN_MS + Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
-        await sleep(jitter);
-        continue;
-      }
-      return r;
+      const result = await this.tryAcquire(options);
+      if (result) return result;
+
+      const jitter =
+        POOL.ACQUIRE_RETRY_MIN_MS +
+        Math.floor(Math.random() * (POOL.ACQUIRE_RETRY_MAX_MS - POOL.ACQUIRE_RETRY_MIN_MS + 1));
+      await sleep(jitter);
     }
 
     const diagnostics = await this.getPoolCapacityDetails(options, maxSpins);
@@ -67,13 +62,9 @@ export class ChannelPool {
     });
   }
 
-  // Run a function under the short-lived global mutex; returns null if busy
-  private async withGlobalMutex<T>(fn: () => Promise<T>): Promise<T | null> {
-    return this.kv.withLock(this.globalLockKey, fn, { ttlSec: this.mutexTtlSec, onBusy: 'skip' });
-  }
-
-  // Inside the mutex: pick an available relayer and set its channel lock (LRU ordering)
-  private async tryLockAnyRelayer(options: AcquireOptions): Promise<PoolLock | null> {
+  /** Read phase + claim phase (no global mutex) */
+  private async tryAcquire(options: AcquireOptions): Promise<PoolLock | null> {
+    // --- READ PHASE (no lock) ---
     let ids = await this.getRelayerIdsFromKV();
     if (ids.length === 0) {
       throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
@@ -87,36 +78,72 @@ export class ChannelPool {
     }
 
     const lockPrefix = this.lockKeyPrefix();
-    const [lockedKeys, lruMapRaw] = await Promise.all([
-      this.kv.listKeys(`${lockPrefix}*`),
-      this.kv.get<Record<string, number>>(this.lruMapKey()),
-    ]);
-    const lruMap = lruMapRaw ?? {};
-    const lockedSet = new Set(lockedKeys.map(k => k.slice(lockPrefix.length)));
+    let lockedSet: Set<string>;
+    let lruMap: Record<string, number>;
+    try {
+      const [lockedKeys, lruMapRaw] = await Promise.all([
+        this.kv.listKeys(`${lockPrefix}*`),
+        this.kv.get<Record<string, number>>(this.lruMapKey()),
+      ]);
+      lruMap = lruMapRaw ?? {};
+      lockedSet = new Set(lockedKeys.map(k => k.slice(lockPrefix.length)));
+    } catch (err) {
+      // Fallback: if listKeys fails, degrade to O(N) per-channel exists checks.
+      // This is expensive with many channels — log so persistent failures are observable.
+      console.warn('[channels] listKeys failed, falling back to per-channel exists checks', err);
+      lruMap = {};
+      const results = await Promise.all(ids.map(id => this.kv.exists(this.lockKey(id))));
+      lockedSet = new Set(ids.filter((_, i) => results[i]));
+    }
 
     const unlocked = ids.filter(id => !lockedSet.has(id));
     if (unlocked.length === 0) return null;
 
-    // Shuffle for tie-breaking, then stable-sort by lastUsedAt ascending (LRU first)
+    // Sort by LRU ascending — oldest channel is always first (deterministic).
+    // Shuffle-then-stable-sort: tie-break among equal timestamps is random,
+    // spreading contention when multiple channels share the same LRU value.
     shuffle(unlocked);
     unlocked.sort((a, b) => (lruMap[a] ?? 0) - (lruMap[b] ?? 0));
+    const candidates = unlocked;
 
-    const pick = unlocked[0];
-    const token = randomToken();
-    await this.kv.set(
-      this.lockKey(pick),
-      { token, lockedAt: new Date().toISOString() },
-      { ttlSec: this.channelLockTtlSec }
-    );
-
-    lruMap[pick] = Date.now();
-    try {
-      await this.kv.set(this.lruMapKey(), lruMap, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
-    } catch {
-      // Best-effort: stale LRU map only affects ordering, not correctness
+    // --- CLAIM PHASE (per-channel lock) ---
+    for (const candidate of candidates) {
+      const result = await this.tryClaimChannel(candidate);
+      if (result) return result;
     }
 
-    return { relayerId: pick, token };
+    return null;
+  }
+
+  /** Attempt to claim a single channel under its per-channel lock */
+  private async tryClaimChannel(relayerId: string): Promise<PoolLock | null> {
+    return this.kv.withLock(
+      this.claimKey(relayerId),
+      async () => {
+        // Double-check: another worker may have claimed it between our scan and this lock
+        if (await this.kv.exists(this.lockKey(relayerId))) return null;
+
+        const token = randomToken();
+        await this.kv.set(
+          this.lockKey(relayerId),
+          { token, lockedAt: new Date().toISOString() },
+          { ttlSec: this.channelLockTtlSec },
+        );
+
+        // Best-effort LRU update — re-fetch the map to minimize last-writer-wins
+        // staleness (the read-phase copy may be many retries old). Concurrent workers
+        // claiming different channels can still race on get→set, but the window is
+        // narrow. Only affects ordering precision, not claim correctness.
+        try {
+          const freshLru = await this.kv.get<Record<string, number>>(this.lruMapKey()) ?? {};
+          freshLru[relayerId] = Date.now();
+          await this.kv.set(this.lruMapKey(), freshLru, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
+        } catch { /* ordering-only */ }
+
+        return { relayerId, token };
+      },
+      { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' },
+    );
   }
 
   /** Extend the lock TTL if we still own it (e.g. after WAIT_TIMEOUT) */
@@ -173,6 +200,10 @@ export class ChannelPool {
 
   private lockKey(relayerId: string): string {
     return `${this.lockKeyPrefix()}${relayerId}`;
+  }
+
+  private claimKey(relayerId: string): string {
+    return `${this.network}:channel:claim:${relayerId}`;
   }
 
   private lruMapKey(): string {

@@ -111,6 +111,7 @@ describe('ChannelPool', () => {
     await kv.set('testnet:channel:lru-map', { p1: Date.now() - 10000 });
 
     const lock = await pool.acquire(defaultOptions);
+    // p2 has no LRU entry (defaults to 0), so it's older than p1 and should be in top-K
     expect(lock.relayerId).toBe('p2');
   });
 
@@ -176,4 +177,92 @@ describe('ChannelPool', () => {
       contractId: 'C123',
     });
   });
+
+  test('concurrent claims: no duplicate relayerId allocation', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2', 'p3'] });
+
+    // Launch 3 concurrent acquires for 3 channels — all should succeed with unique IDs
+    const results = await Promise.all([
+      pool.acquire(defaultOptions),
+      pool.acquire(defaultOptions),
+      pool.acquire(defaultOptions),
+    ]);
+
+    const relayerIds = results.map(r => r.relayerId);
+    expect(new Set(relayerIds).size).toBe(3);
+
+    // Verify each token matches what's stored in KV
+    for (const lock of results) {
+      const stored = await kv.get<{ token: string }>(`testnet:channel:in-use:${lock.relayerId}`);
+      expect(stored?.token).toBe(lock.token);
+    }
+  });
+
+  test('claim-busy fallback: skips busy claim lock and tries next candidate', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
+
+    // Pre-lock the claim key for p1 and p2's in-use key is free
+    // Simulate: p1's claim lock is held by another worker
+    await kv.set('testnet:channel:claim:p1', { token: 'lock' }, { ttlSec: 3 });
+
+    const lock = await pool.acquire(defaultOptions);
+    // p1's claim lock is busy so it should be skipped; p2 should be acquired
+    expect(lock.relayerId).toBe('p2');
+  });
+
+  test('double-check inside claim: rejects already-claimed channel', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
+
+    // Pre-set p1's in-use key (simulating another worker claimed it after our scan)
+    await kv.set('testnet:channel:in-use:p1', { token: 'other-worker', lockedAt: new Date().toISOString() }, { ttlSec: 30 });
+
+    const lock = await pool.acquire(defaultOptions);
+    // p1 is already in-use (double-check inside claim rejects it), so p2 is acquired
+    expect(lock.relayerId).toBe('p2');
+  });
+
+  test('stress: N concurrent acquires against M channels, no duplicates', async () => {
+    const numChannels = 20;
+    const numWorkers = 100;
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    const ids = Array.from({ length: numChannels }, (_, i) => `ch${i}`);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ids });
+
+    const promises = Array.from({ length: numWorkers }, () =>
+      pool.acquire(defaultOptions).then(
+        (lock) => ({ ok: true as const, lock }),
+        (err) => ({ ok: false as const, err }),
+      )
+    );
+
+    const results = await Promise.all(promises);
+    const successes = results.filter(r => r.ok).map(r => (r as any).lock);
+    const failures = results.filter(r => !r.ok);
+
+    // Exactly numChannels should succeed
+    expect(successes.length).toBe(numChannels);
+    expect(failures.length).toBe(numWorkers - numChannels);
+
+    // No duplicate relayerIds
+    const acquiredIds = successes.map((l: any) => l.relayerId);
+    expect(new Set(acquiredIds).size).toBe(numChannels);
+
+    // Each returned token matches stored KV
+    for (const lock of successes) {
+      const stored = await kv.get<{ token: string }>(`testnet:channel:in-use:${lock.relayerId}`);
+      expect(stored?.token).toBe(lock.token);
+    }
+
+    // All failures are POOL_CAPACITY
+    for (const f of failures) {
+      expect((f as any).err.code).toBe('POOL_CAPACITY');
+    }
+  }, 30_000);
 });

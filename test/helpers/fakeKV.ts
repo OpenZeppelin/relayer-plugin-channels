@@ -39,18 +39,21 @@ export class FakeKV implements PluginKVStore {
     fn: () => Promise<T>,
     opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }
   ): Promise<T | null> {
-    // Simple, non-reentrant lock for testing; not robust
-    if (await this.exists(key)) {
+    // Synchronous check-and-set to simulate atomic lock acquisition.
+    // Using await between check and set would allow interleaving in Promise.all.
+    const now = Date.now();
+    const entry = this.store.get(key);
+    const isLocked = entry && (!entry.expiresAt || entry.expiresAt > now);
+    if (isLocked) {
       if (opts?.onBusy === 'skip') return null;
       throw new Error('lock busy');
     }
-    // Respect requested TTL to better emulate production behavior
     const ttl = opts?.ttlSec && opts.ttlSec > 0 ? opts.ttlSec : 1;
-    await this.set(key, { token: 'lock' }, { ttlSec: ttl });
+    this.store.set(key, { value: { token: 'lock' }, expiresAt: now + ttl * 1000 });
     try {
       return await fn();
     } finally {
-      await this.del(key);
+      this.store.delete(key);
     }
   }
 
