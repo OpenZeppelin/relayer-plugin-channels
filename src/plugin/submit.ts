@@ -13,7 +13,7 @@ import {
   PluginAPI,
 } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS, TIMEOUT, POLLING } from './constants';
-import { ChannelAccountsConfig } from './config';
+import type { ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { FeeTracker } from './fee-tracking';
 
