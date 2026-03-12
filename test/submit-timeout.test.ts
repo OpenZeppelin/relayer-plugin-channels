@@ -91,4 +91,31 @@ describe('submitWithFeeBumpAndWait dynamic timeout', () => {
     expect(opts.timeout).toBeLessThanOrEqual(1_000);
     expect(opts.timeout).toBeGreaterThan(0);
   });
+
+  test('uses custom timeout config when provided', async () => {
+    const { fundRelayer, api, transactionWait } = makeMocks();
+    const startTime = Date.now() - 2_000;
+
+    await submitWithFeeBumpAndWait(fundRelayer, 'xdr', 'testnet', 1000, api, startTime, undefined, undefined, false, {
+      globalTimeoutMs: 12_000,
+      pollingTimeoutMs: 4_000,
+    });
+
+    const opts = transactionWait.mock.calls[0][1];
+    expect(opts.timeout).toBe(4_000);
+  });
+
+  test('uses remaining custom global timeout when below custom polling cap', async () => {
+    const { fundRelayer, api, transactionWait } = makeMocks();
+    const startTime = Date.now() - 7_500;
+
+    await submitWithFeeBumpAndWait(fundRelayer, 'xdr', 'testnet', 1000, api, startTime, undefined, undefined, false, {
+      globalTimeoutMs: 12_000,
+      pollingTimeoutMs: 10_000,
+    });
+
+    const opts = transactionWait.mock.calls[0][1];
+    expect(opts.timeout).toBeLessThanOrEqual(2_500);
+    expect(opts.timeout).toBeGreaterThan(0);
+  });
 });
