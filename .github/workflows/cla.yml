@@ -5,6 +5,9 @@ on:
   pull_request_target:
     types: [opened, closed, synchronize]
 
+# Security note: this workflow runs with pull_request_target and write permissions,
+# but it never checks out or executes PR head code. It only checks out the
+# controlled OpenZeppelin/cla-sigs repository to read the CLA allowlist.
 permissions:
   actions: write
   contents: write
@@ -18,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        uses: step-security/harden-runner@58077d3c7e43986b6b15fba718e8ea69e387dfcc # v2.15.1
         with:
           egress-policy: audit
 
       - name: Checkout Private Repo for Allowlist
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 #v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: OpenZeppelin/cla-sigs
           token: ${{ secrets.CLA_SIGS_ACCESS_PAT }}
@@ -34,12 +37,15 @@ jobs:
       - name: Read Allowlist File
         id: read_allowlist
         run: |
-          ALLOWLIST=$(cat allowlist.txt)
-          echo "allowlist=$ALLOWLIST" >> $GITHUB_OUTPUT
+          {
+            echo 'allowlist<<EOF'
+            cat allowlist.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: 'CLA Assistant'
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I confirm that I have read and hereby agree to the OpenZeppelin Contributor License Agreement') || github.event_name == 'pull_request_target'
-        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 #v2.6.1
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGS_ACCESS_PAT }}
