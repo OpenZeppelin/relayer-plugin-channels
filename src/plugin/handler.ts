@@ -112,7 +112,8 @@ async function handleXdrSubmit(
     ctx.startTime,
     ctx.tracker,
     submitContext,
-    skipWait
+    skipWait,
+    ctx.config
   );
 }
 
@@ -205,7 +206,8 @@ async function handleFuncAuthSubmit(
         ctx.startTime,
         ctx.tracker,
         submitContext,
-        skipWait
+        skipWait,
+        ctx.config
       );
       if (result.status === 'pending' || result.status === 'sent' || result.status === 'submitted') {
         // extend lock and clear sequence
