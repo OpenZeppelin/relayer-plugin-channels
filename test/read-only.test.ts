@@ -21,6 +21,18 @@ function buildWriteTransactionData(): string {
   return sorobanData.toXDR('base64');
 }
 
+function buildWriteTransactionDataWithResourceFee(resourceFee: bigint): string {
+  const entry = xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+      key: xdr.ScVal.scvBool(true),
+      durability: xdr.ContractDataDurability.persistent(),
+    })
+  );
+  const sorobanData = new SorobanDataBuilder().setFootprint([entry], [entry]).setResourceFee(resourceFee).build();
+  return sorobanData.toXDR('base64');
+}
+
 function makeRelayerMock(result: object, error?: any) {
   return {
     rpc: vi.fn().mockResolvedValue({
@@ -286,6 +298,113 @@ describe('buildWithChannel', () => {
     func = parsedOp.body().invokeHostFunctionOp().hostFunction();
   });
 
+  function buildAuthEntryXdr(expiryLedger: number): xdr.SorobanAuthorizationEntry {
+    return new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new xdr.SorobanAddressCredentials({
+          address: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+          nonce: xdr.Int64.fromString('0'),
+          signatureExpirationLedger: expiryLedger,
+          signature: xdr.ScVal.scvVoid(),
+        })
+      ),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({
+            contractAddress: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+            functionName: 'test',
+            args: [],
+          })
+        ),
+        subInvocations: [],
+      }),
+    });
+  }
+
+  test('rejects when auth signatureExpirationLedger is below minSignatureExpirationLedgerBuffer', async () => {
+    const latestLedger = 10000;
+    // expiry = 10001 → margin = 1, default buffer = 2 → should reject
+    const authEntry = buildAuthEntryXdr(latestLedger + 1);
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXDR('base64')] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger,
+      minResourceFee: '100',
+    };
+    const relayer = makeRelayerMock(rpcResult);
+    const simResult = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    try {
+      buildWithChannel(
+        func,
+        [authEntry],
+        { address: CHANNEL_ADDRESS, sequence: '100' },
+        passphrase,
+        simResult.rawSimResult
+      );
+      throw new Error('Expected buildWithChannel to throw');
+    } catch (err: any) {
+      expect(err.code).toBe('AUTH_EXPIRY_TOO_SHORT');
+      expect(err.details.margin).toBe(1);
+      expect(err.details.minimumRequired).toBe(2);
+    }
+  });
+
+  test('rejects when auth expiry margin is below custom minSignatureExpirationLedgerBuffer', async () => {
+    const latestLedger = 10000;
+    // expiry = 10004 → margin = 4, custom buffer = 5 → should reject
+    const authEntry = buildAuthEntryXdr(latestLedger + 4);
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXDR('base64')] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger,
+      minResourceFee: '100',
+    };
+    const relayer = makeRelayerMock(rpcResult);
+    const simResult = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    try {
+      buildWithChannel(
+        func,
+        [authEntry],
+        { address: CHANNEL_ADDRESS, sequence: '100' },
+        passphrase,
+        simResult.rawSimResult,
+        5
+      );
+      throw new Error('Expected buildWithChannel to throw');
+    } catch (err: any) {
+      expect(err.code).toBe('AUTH_EXPIRY_TOO_SHORT');
+      expect(err.details.margin).toBe(4);
+      expect(err.details.minimumRequired).toBe(5);
+    }
+  });
+
+  test('accepts when auth expiry margin meets custom minSignatureExpirationLedgerBuffer', async () => {
+    const latestLedger = 10000;
+    // expiry = 10005 → margin = 5, custom buffer = 5 → should pass
+    const authEntry = buildAuthEntryXdr(latestLedger + 5);
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXDR('base64')] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger,
+      minResourceFee: '100',
+    };
+    const relayer = makeRelayerMock(rpcResult);
+    const simResult = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    const tx = buildWithChannel(
+      func,
+      [authEntry],
+      { address: CHANNEL_ADDRESS, sequence: '100' },
+      passphrase,
+      simResult.rawSimResult,
+      5
+    );
+    expect(tx).toBeDefined();
+    expect(tx.source).toBe(CHANNEL_ADDRESS);
+  });
+
   test('assembles a transaction from cached simulation result without network calls', async () => {
     // First simulate to get a real rawSimResult
     const rpcResult = {
@@ -310,5 +429,28 @@ describe('buildWithChannel', () => {
     expect(tx.source).toBe(CHANNEL_ADDRESS);
     // Verify the relayer was only called once (by simulateTransaction, not by buildWithChannel)
     expect(relayer.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  test('builds inner tx fee as classic fee + resource fee exactly once', async () => {
+    const resourceFee = 25102n;
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [] }],
+      transactionData: buildWriteTransactionDataWithResourceFee(resourceFee),
+      latestLedger: 12345,
+      // Intentionally set doubled minResourceFee to mirror problematic provider responses.
+      minResourceFee: (resourceFee * 2n).toString(),
+    };
+    const relayer = makeRelayerMock(rpcResult);
+    const simResult = await simulateTransaction(func, [], SOURCE_ADDRESS, relayer, passphrase);
+
+    const tx = buildWithChannel(
+      func,
+      [],
+      { address: CHANNEL_ADDRESS, sequence: '100' },
+      passphrase,
+      simResult.rawSimResult
+    );
+
+    expect(tx.fee).toBe((100n + resourceFee).toString());
   });
 });

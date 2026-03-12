@@ -46,6 +46,10 @@ export type ChannelsClientConfig = DirectHttpConfig | RelayerConfig;
 export interface ChannelsXdrRequest {
   /** Complete signed transaction envelope XDR */
   xdr: string;
+  /** When true, returns immediately after submission without waiting for confirmation */
+  skipWait?: boolean;
+  /** Alternative fund relayer ID for fee bumping (must be in the allowed list) */
+  fundRelayerId?: string;
 }
 
 /**
@@ -56,6 +60,18 @@ export interface ChannelsFuncAuthRequest {
   func: string;
   /** Array of authorization entry XDRs (base64) */
   auth: string[];
+  /** When true, returns immediately after submission without waiting for confirmation */
+  skipWait?: boolean;
+  /** Alternative fund relayer ID for fee bumping (must be in the allowed list) */
+  fundRelayerId?: string;
+}
+
+/**
+ * Request to get a transaction by ID
+ */
+export interface ChannelsGetTransactionRequest {
+  /** Transaction ID returned from a previous submission */
+  transactionId: string;
 }
 
 /**

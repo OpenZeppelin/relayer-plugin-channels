@@ -264,6 +264,142 @@ describe('ChannelsClient', () => {
     });
   });
 
+  describe('skipWait - Direct HTTP', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+    });
+
+    test('should send skipWait with XDR request', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            transactionId: 'tx-123',
+            hash: null,
+            status: 'pending',
+          },
+        },
+      });
+
+      const result = await client.submitTransaction({
+        xdr: 'AAAAAgAAAAC...',
+        skipWait: true,
+      });
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          xdr: 'AAAAAgAAAAC...',
+          skipWait: true,
+        },
+      });
+
+      expect(result.status).toBe('pending');
+      expect(result.hash).toBeNull();
+    });
+
+    test('should send skipWait with func+auth request', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            transactionId: 'tx-456',
+            hash: null,
+            status: 'pending',
+          },
+        },
+      });
+
+      const result = await client.submitSorobanTransaction({
+        func: 'BASE64FUNC',
+        auth: ['AUTH1'],
+        skipWait: true,
+      });
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          func: 'BASE64FUNC',
+          auth: ['AUTH1'],
+          skipWait: true,
+        },
+      });
+
+      expect(result.status).toBe('pending');
+    });
+  });
+
+  describe('getTransaction - Direct HTTP', () => {
+    let client: ChannelsClient;
+    let mockAxiosInstance: any;
+
+    beforeEach(() => {
+      mockAxiosInstance = {
+        post: vi.fn(),
+      };
+      mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
+      client = new ChannelsClient({
+        baseUrl: 'https://channels.example.com',
+        apiKey: 'test-api-key',
+      });
+    });
+
+    test('should get transaction by ID', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            transactionId: 'tx-123',
+            hash: 'hash-abc',
+            status: 'confirmed',
+          },
+        },
+      });
+
+      const result = await client.getTransaction({ transactionId: 'tx-123' });
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/', {
+        params: {
+          getTransaction: { transactionId: 'tx-123' },
+        },
+      });
+
+      expect(result).toEqual({
+        transactionId: 'tx-123',
+        hash: 'hash-abc',
+        status: 'confirmed',
+      });
+    });
+
+    test('should return pending transaction with null hash', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            transactionId: 'tx-456',
+            hash: null,
+            status: 'pending',
+          },
+        },
+      });
+
+      const result = await client.getTransaction({ transactionId: 'tx-456' });
+
+      expect(result.status).toBe('pending');
+      expect(result.hash).toBeNull();
+    });
+  });
+
   describe('submitTransaction - Via Relayer', () => {
     let client: ChannelsClient;
     let mockPluginsApi: any;

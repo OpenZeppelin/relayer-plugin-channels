@@ -6,6 +6,7 @@ import type {
   ChannelsClientConfig,
   ChannelsXdrRequest,
   ChannelsFuncAuthRequest,
+  ChannelsGetTransactionRequest,
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
@@ -112,6 +113,25 @@ export class ChannelsClient {
    */
   async submitSorobanTransaction(request: ChannelsFuncAuthRequest): Promise<ChannelsTransactionResponse> {
     return this.call<ChannelsTransactionResponse>(request);
+  }
+
+  /**
+   * Get a transaction by ID, typically used to poll after a skipWait submission
+   *
+   * @param request Request with transactionId
+   * @returns Transaction result with ID, hash, and status
+   * @throws {PluginTransportError} Network/HTTP failures
+   * @throws {PluginExecutionError} Plugin rejected the request
+   * @throws {PluginUnexpectedError} Malformed response or client-side errors
+   *
+   * @example
+   * const result = await client.getTransaction({ transactionId: 'tx-123' });
+   * console.log(result.status); // 'confirmed', 'pending', etc.
+   */
+  async getTransaction(request: ChannelsGetTransactionRequest): Promise<ChannelsTransactionResponse> {
+    return this.call<ChannelsTransactionResponse>({
+      getTransaction: { transactionId: request.transactionId },
+    });
   }
 
   /**

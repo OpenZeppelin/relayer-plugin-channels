@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { Networks } from '@stellar/stellar-sdk';
 import { loadConfig, getNetworkPassphrase } from '../src/plugin/config';
+import { POLLING, TIMEOUT } from '../src/plugin/constants';
 
 const env = process.env;
 
@@ -21,6 +22,13 @@ describe('config', () => {
     const cfg = loadConfig();
     expect(cfg.network).toBe('testnet');
     expect(cfg.fundRelayerId).toBe('fund-relayer');
+    expect(cfg.allowedFundRelayerIds.size).toBe(0);
+  });
+
+  test('allowed fund relayer ids parses comma-separated values', () => {
+    process.env.ALLOWED_FUND_RELAYER_IDS = 'x402-fund, alt-fund ';
+    const cfg = loadConfig();
+    expect(cfg.allowedFundRelayerIds).toEqual(new Set(['x402-fund', 'alt-fund']));
   });
 
   test('network passphrase', () => {
@@ -141,5 +149,53 @@ describe('config', () => {
 
     process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS = 'invalid';
     expect(loadConfig().sequenceNumberCacheMaxAgeMs).toBe(120_000);
+  });
+
+  test('min auth expiry ledger buffer', () => {
+    delete process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2); // default
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '5';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(5);
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '3.7';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(3); // floors to integer
+
+    // Invalid values fall back to default
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '0';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = '-1';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+
+    process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = 'invalid';
+    expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+  });
+
+  test('timeout config uses defaults and parses valid custom values', () => {
+    delete process.env.PLUGIN_GLOBAL_TIMEOUT_MS;
+    delete process.env.PLUGIN_POLLING_TIMEOUT_MS;
+    expect(loadConfig().globalTimeoutMs).toBe(TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS);
+    expect(loadConfig().pollingTimeoutMs).toBe(POLLING.DEFAULT_TIMEOUT_MS);
+
+    process.env.PLUGIN_GLOBAL_TIMEOUT_MS = '45000.8';
+    process.env.PLUGIN_POLLING_TIMEOUT_MS = '12000.1';
+    const cfg = loadConfig();
+    expect(cfg.globalTimeoutMs).toBe(45000);
+    expect(cfg.pollingTimeoutMs).toBe(12000);
+  });
+
+  test('timeout config falls back to defaults for invalid values', () => {
+    process.env.PLUGIN_GLOBAL_TIMEOUT_MS = '0';
+    process.env.PLUGIN_POLLING_TIMEOUT_MS = '-100';
+    let cfg = loadConfig();
+    expect(cfg.globalTimeoutMs).toBe(TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS);
+    expect(cfg.pollingTimeoutMs).toBe(POLLING.DEFAULT_TIMEOUT_MS);
+
+    process.env.PLUGIN_GLOBAL_TIMEOUT_MS = 'invalid';
+    process.env.PLUGIN_POLLING_TIMEOUT_MS = '';
+    cfg = loadConfig();
+    expect(cfg.globalTimeoutMs).toBe(TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS);
+    expect(cfg.pollingTimeoutMs).toBe(POLLING.DEFAULT_TIMEOUT_MS);
   });
 });

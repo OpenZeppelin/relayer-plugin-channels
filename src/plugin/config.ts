@@ -6,7 +6,7 @@
 
 import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, CONFIG } from './constants';
+import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING } from './constants';
 
 // Default inclusion fees (matching launchtube)
 const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + 3; // 203
@@ -14,6 +14,8 @@ const DEFAULT_INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1; // 201
 
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
+  /** Map of allowed alternative fund relayer IDs (e.g. { "x402-channels-fund": true }) */
+  allowedFundRelayerIds: Set<string>;
   network: 'testnet' | 'mainnet';
   lockTtlSeconds: number;
   adminSecret?: string;
@@ -25,6 +27,9 @@ export interface ChannelAccountsConfig {
   inclusionFeeDefault: number;
   inclusionFeeLimited: number;
   sequenceNumberCacheMaxAgeMs: number;
+  minSignatureExpirationLedgerBuffer: number;
+  globalTimeoutMs: number;
+  pollingTimeoutMs: number;
 }
 
 function requireEnv(name: string): string {
@@ -107,11 +112,44 @@ function parseInclusionFee(envVar: string, defaultValue: number): number {
   return Math.floor(n);
 }
 
+function parseMinAuthExpiryLedgerBuffer(): number {
+  const raw = process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+  if (!raw) return CONFIG.DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : CONFIG.DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER;
+}
+
 function parseSequenceNumberCacheMaxAge(): number {
   const raw = process.env.SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
   if (!raw) return CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : CONFIG.DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS;
+}
+
+function parseAllowedFundRelayerIds(): Set<string> {
+  const ids = new Set<string>();
+  const raw = process.env.ALLOWED_FUND_RELAYER_IDS;
+  if (raw) {
+    for (const id of raw.split(',')) {
+      const trimmed = id.trim();
+      if (trimmed.length > 0) ids.add(trimmed);
+    }
+  }
+  return ids;
+}
+
+function parseGlobalTimeoutMs(): number {
+  const raw = process.env.PLUGIN_GLOBAL_TIMEOUT_MS;
+  if (!raw) return TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS;
+}
+
+function parsePollingTimeoutMs(): number {
+  const raw = process.env.PLUGIN_POLLING_TIMEOUT_MS;
+  if (!raw) return POLLING.DEFAULT_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : POLLING.DEFAULT_TIMEOUT_MS;
 }
 
 function parseContractCapacityRatio(): number {
@@ -136,8 +174,11 @@ export function loadConfig(): ChannelAccountsConfig {
     });
   }
 
+  const allowedFundRelayerIds = parseAllowedFundRelayerIds();
+
   return {
     fundRelayerId: requireEnv('FUND_RELAYER_ID'),
+    allowedFundRelayerIds,
     network: networkRaw as 'testnet' | 'mainnet',
     lockTtlSeconds: parseLockTtl(),
     adminSecret: parseOptionalString('PLUGIN_ADMIN_SECRET'),
@@ -149,6 +190,9 @@ export function loadConfig(): ChannelAccountsConfig {
     inclusionFeeDefault: parseInclusionFee('INCLUSION_FEE_DEFAULT', DEFAULT_INCLUSION_FEE_DEFAULT),
     inclusionFeeLimited: parseInclusionFee('INCLUSION_FEE_LIMITED', DEFAULT_INCLUSION_FEE_LIMITED),
     sequenceNumberCacheMaxAgeMs: parseSequenceNumberCacheMaxAge(),
+    minSignatureExpirationLedgerBuffer: parseMinAuthExpiryLedgerBuffer(),
+    globalTimeoutMs: parseGlobalTimeoutMs(),
+    pollingTimeoutMs: parsePollingTimeoutMs(),
   };
 }
 

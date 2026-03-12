@@ -12,7 +12,8 @@ import {
   StellarTransactionResponse,
   PluginAPI,
 } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS } from './constants';
+import { HTTP_STATUS, TIMEOUT, POLLING } from './constants';
+import type { ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { FeeTracker } from './fee-tracking';
 
@@ -73,8 +74,11 @@ export async function submitWithFeeBumpAndWait(
   network: 'testnet' | 'mainnet',
   maxFee: number,
   api: PluginAPI,
+  startTime: number,
   tracker?: FeeTracker,
-  context?: SubmitContext
+  context?: SubmitContext,
+  skipWait?: boolean,
+  config?: Pick<ChannelAccountsConfig, 'globalTimeoutMs' | 'pollingTimeoutMs'>
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
   console.debug(`[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`);
@@ -87,11 +91,43 @@ export async function submitWithFeeBumpAndWait(
   console.debug(`[channels] Relayer payload: ${JSON.stringify(payload)}`);
   const submission = await fundRelayer.sendTransaction(payload);
 
+  // skipWait: return immediately after sendTransaction without waiting for confirmation
+  if (skipWait) {
+    console.debug(`[channels] skipWait enabled, returning pending result immediately`);
+    if (tracker) {
+      await tracker.recordUsage(maxFee);
+    }
+    return {
+      transactionId: submission.id,
+      status: 'pending',
+      hash: submission.hash ?? null,
+    };
+  }
+
+  // Compute dynamic timeout from remaining global budget
+  const globalTimeout = config?.globalTimeoutMs ?? TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS;
+  const pollingTimeout = config?.pollingTimeoutMs ?? POLLING.DEFAULT_TIMEOUT_MS;
+  const elapsedMs = Date.now() - startTime;
+  const remainingMs = globalTimeout - TIMEOUT.BUFFER_MS - elapsedMs;
+  if (remainingMs <= 0) {
+    throw pluginError('No time remaining for transaction wait', {
+      code: 'WAIT_TIMEOUT',
+      status: HTTP_STATUS.GATEWAY_TIMEOUT,
+      details: {
+        id: submission.id,
+        hash: submission.hash ?? null,
+        elapsedMs,
+      },
+    });
+  }
+  const timeout = Math.min(remainingMs, pollingTimeout);
+  console.debug(`[channels] Transaction wait: elapsed=${elapsedMs}ms, timeout=${timeout}ms`);
+
   // Wait for confirmation
   try {
     const final = (await api.transactionWait(submission, {
-      interval: 500,
-      timeout: 25000,
+      interval: POLLING.INTERVAL_MS,
+      timeout,
     })) as StellarTransactionResponse;
 
     // Check if transaction actually succeeded

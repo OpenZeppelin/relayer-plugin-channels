@@ -16,6 +16,7 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
 - [Development](#development)
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [x402 Fund Relayer](#x402-fund-relayer)
 - [Contract Capacity Limits](#contract-capacity-limits)
 - [Management API](#management-api)
   - [List Channel Accounts](#list-channel-accounts)
@@ -37,6 +38,8 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
   - [Submit with Transaction XDR](#submit-with-transaction-xdr)
   - [Submit with Function and Auth](#submit-with-function-and-auth)
   - [Parameters](#parameters)
+  - [Fire-and-Forget with skipWait](#fire-and-forget-with-skipwait)
+  - [Get Transaction by ID](#get-transaction-by-id)
   - [Response](#response)
 - [How It Works](#how-it-works)
 - [Validation Rules](#validation-rules)
@@ -219,6 +222,8 @@ export FUND_RELAYER_ID="channels-fund"
 export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 
 # Optional environment variables
+# Comma-separated list of allowed alternative fund relayers (e.g., for x402 or similar flows)
+export ALLOWED_FUND_RELAYER_IDS="x402-channels-fund" 
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 
 # Fee tracking (optional)
@@ -233,6 +238,12 @@ export CONTRACT_CAPACITY_RATIO=0.8        # Max ratio of pool for limited contra
 # Inclusion fee overrides (optional)
 export INCLUSION_FEE_DEFAULT=203           # Inclusion fee in stroops for regular contracts (default: BASE_FEE * 2 + 3 = 203)
 export INCLUSION_FEE_LIMITED=201           # Inclusion fee in stroops for limited contracts (default: BASE_FEE * 2 + 1 = 201)
+
+# Sequence number cache (optional)
+export SEQUENCE_NUMBER_CACHE_MAX_AGE_MS=120000  # Max age of cached sequence numbers in ms (default: 120000)
+
+# Auth expiry validation (optional)
+export MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER=2  # Minimum ledger margin for auth entry signatureExpirationLedger (default: 2)
 ```
 
 Your Relayer should now contain:
@@ -299,6 +310,71 @@ The Channels plugin accepts Soroban operations and handles all the complexity of
 - **Fund Account**: Holds funds and pays for fee bumps
 - **Channel Accounts**: Provide unique sequence numbers for parallel transaction submission
 - The channel account is the transaction source and signer; the fund account wraps it in a fee bump
+
+## Alternative Fund Relayers
+
+The plugin supports optional secondary fund relayers for [x402](https://www.x402.org/) and similar payment flows. Pass `fundRelayerId` in the request and allowlist that ID through `ALLOWED_FUND_RELAYER_IDS`.
+
+### Configuration
+
+```bash
+export ALLOWED_FUND_RELAYER_IDS="x402-fund"
+```
+
+Every allowed alternative fund relayer must reference a relayer configured in your Relayer's `config.json`, just like the primary fund account. Add it alongside your existing relayers:
+
+```json
+{
+  "id": "x402-fund",
+  "name": "x402 Fund Account",
+  "network": "testnet",
+  "paused": false,
+  "network_type": "stellar",
+  "signer_id": "x402-fund-signer",
+  "policies": {
+    "concurrent_transactions": true,
+    "fee_payment_strategy": "relayer"
+  }
+}
+```
+
+### Preferred usage
+
+Pass `fundRelayerId` in any `xdr` or `func`+`auth` request to route fee bumping through the specified fund relayer:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "xdr": "AAAAAgAAAAB...",
+      "fundRelayerId": "x402-fund"
+    }
+  }'
+```
+
+Or with `func`+`auth`:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
+      "auth": ["AAAACAAAAAEAAAA..."],
+      "fundRelayerId": "x402-fund"
+    }
+  }'
+```
+
+### Notes
+
+- If `fundRelayerId` is provided but not listed in `ALLOWED_FUND_RELAYER_IDS`, the plugin rejects the request
+- When `fundRelayerId` is omitted, the primary `FUND_RELAYER_ID` is used
+- `fundRelayerId` must be a non-empty string
+- `getTransaction` requests can also include `fundRelayerId`; polling should use the same relayer selection as submission
 
 ## Contract Capacity Limits
 
@@ -663,6 +739,23 @@ const result = await client.submitSorobanTransaction({
 console.log(result.hash);
 ```
 
+#### Submit with Alternative Fund Relayer
+
+```typescript
+// Submit using an alternative fund relayer for fee bumping
+const result = await client.submitTransaction({
+  xdr: 'AAAAAgAAAAC...', // Complete transaction envelope XDR
+  fundRelayerId: 'x402-fund',
+});
+
+// Also works with func+auth
+const result2 = await client.submitSorobanTransaction({
+  func: 'AAAABAAAAAEAAAAGc3ltYm9s...',
+  auth: ['AAAACAAAAAEAAAA...'],
+  fundRelayerId: 'x402-fund',
+});
+```
+
 #### List Channel Accounts (Management)
 
 ```typescript
@@ -792,8 +885,8 @@ All request and response types are fully typed:
 
 ```typescript
 import type {
-  ChannelsXdrRequest,
-  ChannelsFuncAuthRequest,
+  ChannelsXdrRequest, // includes optional x402 field
+  ChannelsFuncAuthRequest, // includes optional x402 field
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,
   SetChannelAccountsResponse,
@@ -858,8 +951,74 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - `xdr` (string): Complete transaction envelope XDR (signed, not fee-bump)
 - `func` (string): Soroban host function XDR (base64)
 - `auth` (array): Array of Soroban authorization entry XDRs (base64)
+- `skipWait` (boolean, optional): When `true`, returns immediately after submitting the transaction without waiting for confirmation. Defaults to `false`. Must be a boolean — non-boolean values (e.g., `"false"`, `1`) are rejected.
+- `fundRelayerId` (string, optional): Uses the specified alternative fund relayer for fee bumping instead of the primary fund account. Must be present in `ALLOWED_FUND_RELAYER_IDS`.
+- `getTransaction` (object, optional): Poll for a transaction's status by ID. Cannot be combined with other parameters.
 
-**Note**: Provide either `xdr` OR `func`+`auth`, not both.
+**Note**: Provide either `xdr` OR `func`+`auth` OR `getTransaction`, not a combination.
+
+### Fire-and-Forget with `skipWait`
+
+When `skipWait: true` is passed with an `xdr` or `func`+`auth` request, the plugin submits the transaction and returns immediately with status `"pending"` instead of waiting for on-chain confirmation. This is useful for high-throughput scenarios where the caller handles confirmation separately.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "xdr": "AAAAAgAAAAB...",
+      "skipWait": true
+    }
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx_123456",
+    "status": "pending",
+    "hash": null
+  }
+}
+```
+
+Use the returned `transactionId` with `getTransaction` to poll for the final status.
+
+### Get Transaction by ID
+
+Poll for the status of a previously submitted transaction using its `transactionId`. This is typically used after a `skipWait` submission to check whether the transaction has been confirmed.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "getTransaction": {
+        "transactionId": "tx_123456"
+      }
+    }
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx_123456",
+    "status": "confirmed",
+    "hash": "1234567890abcdef..."
+  }
+}
+```
+
+The `status` field reflects the transaction's current state (e.g., `"pending"`, `"sent"`, `"submitted"`, `"confirmed"`, `"failed"`, `"expired"`). The `hash` field is `null` until the transaction is submitted.
 
 ### Response
 
@@ -940,25 +1099,67 @@ Plugin error example:
 - **Key**: `<network>:api-key-limit:<apiKey>`
 - **Value**: `{ limit: number }` (custom fee limit in stroops)
 
+### Sequence Number Cache
+
+- **Key**: `<network>:channel:seq:<address>`
+- **Value**: `{ sequence: string, storedAt: number }` (sequence number and cache timestamp in ms)
+
 ## Error Codes
 
+### Configuration
+
 - `CONFIG_MISSING`: Missing required environment variable
+- `CONFIG_INVALID`: Invalid configuration value (e.g., invalid contract address in `LIMITED_CONTRACTS`)
 - `UNSUPPORTED_NETWORK`: Invalid network type
+
+### Request Validation
+
 - `INVALID_PARAMS`: Invalid request parameters
 - `INVALID_XDR`: Failed to parse XDR
 - `INVALID_ENVELOPE_TYPE`: Not a regular transaction envelope
+- `INVALID_UNSIGNED_XDR`: Unsigned XDR must contain exactly one `invokeHostFunction` operation
 - `INVALID_TIME_BOUNDS`: TimeBounds too far in the future
+- `TIMEBOUNDS_EXPIRED`: Transaction timebounds have expired
+- `TIMEBOUNDS_TOO_FAR`: Transaction timebounds maxTime too far in the future
+- `FEE_MISMATCH`: Fee mismatch in signed transaction
+- `INVALID_OPERATION_SOURCE`: Operation source does not match transaction source
+
+### Pool & Channel
+
 - `NO_CHANNELS_CONFIGURED`: No channel accounts have been configured via management API
 - `POOL_CAPACITY`: All channel accounts in use
 - `RELAYER_UNAVAILABLE`: Relayer not found
+- `FAILED_TO_GET_SEQUENCE`: Failed to fetch channel account sequence number
+- `ACCOUNT_NOT_FOUND`: Channel account not found on the ledger
+
+### Simulation & Assembly
+
 - `SIMULATION_FAILED`: Transaction simulation failed
+- `SIMULATION_NETWORK_ERROR`: Simulation network request failed (HTTP 502)
+- `SIMULATION_RPC_FAILURE`: Simulation RPC provider error (HTTP 502)
+- `SIMULATION_SIGNED_AUTH_VALIDATION_FAILED`: Signed auth entry validation failed in enforce-mode simulation
+- `AUTH_EXPIRY_TOO_SHORT`: Auth entry `signatureExpirationLedger` too close to current ledger
+- `ASSEMBLY_FAILED`: Transaction assembly failed
+
+### Submission
+
+- `INVALID_SIGNATURE`: Invalid channel signature response
 - `ONCHAIN_FAILED`: Transaction failed on-chain
 - `WAIT_TIMEOUT`: Transaction wait timeout
+
+### Fee Tracking
+
+- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured
+- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
+
+### Management
+
 - `MANAGEMENT_DISABLED`: Management API not enabled
 - `UNAUTHORIZED`: Invalid admin secret
+- `INVALID_ACTION`: Invalid management action
+- `INVALID_PAYLOAD`: Invalid management request payload
 - `LOCKED_CONFLICT`: Cannot remove locked channel accounts
-- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured (HTTP 403)
-- `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
+- `KV_ERROR`: KV store operation failed
 
 ## License
 

@@ -100,6 +100,23 @@ export class ChannelPool {
     return null;
   }
 
+  /** Extend the lock TTL if we still own it (e.g. after WAIT_TIMEOUT) */
+  async extendLock(lock: PoolLock, ttlSec?: number): Promise<void> {
+    try {
+      const key = this.lockKey(lock.relayerId);
+      const current = await this.kv.get<{ token?: string }>(key);
+      if (current?.token === lock.token) {
+        await this.kv.set(
+          key,
+          { ...current, lockedAt: new Date().toISOString() },
+          { ttlSec: ttlSec ?? this.channelLockTtlSec }
+        );
+      }
+    } catch {
+      // ignore extend errors — lock will expire via TTL
+    }
+  }
+
   /** Release the lock if we own it */
   async release(lock: PoolLock): Promise<void> {
     try {

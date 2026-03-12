@@ -1,5 +1,42 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.17.0
+
+### Minor Changes
+
+- 493d67e: feat: Add new channel fund for x402 payments (#103)
+
+## 0.16.0
+
+### Minor Changes
+
+- 3d3c3e3: Fix issue with usage of assembleTransaction with latest stellar-base version
+
+## 0.15.0
+
+### Minor Changes
+
+- 164bb3c: Bump dependencies versions
+
+## 0.14.0
+
+### Minor Changes
+
+- 2519475: Introduce skipWait and getTransaction features
+
+## 0.13.0
+
+### Minor Changes
+
+- 19ea8b3: feat: Extend lock on timeout
+- 3bdf6da: Extend channel lock time in case of timeouts
+
+## 0.12.0
+
+### Minor Changes
+
+- 76184fa: feat: Validate auth entry signature expiration ledger
+
 ## 0.11.0
 
 ### Minor Changes

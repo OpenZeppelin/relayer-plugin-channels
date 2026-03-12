@@ -1,6 +1,6 @@
 {
   "name": "@openzeppelin/relayer-plugin-channels",
-  "version": "0.11.0",
+  "version": "0.17.0",
   "description": "OpenZeppelin Relayer Plugin for Stellar Channel Accounts",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,8 +38,8 @@
   "license": "MIT",
   "dependencies": {
     "@actions/exec": "^1.1.1",
-    "@openzeppelin/relayer-sdk": "^1.9.0",
-    "@stellar/stellar-sdk": "^14.5.0",
+    "@openzeppelin/relayer-sdk": "^1.10.0",
+    "@stellar/stellar-sdk": "^14.6.0",
     "axios": "^1.13.5"
   },
   "devDependencies": {

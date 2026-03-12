@@ -24,6 +24,7 @@ export const CONFIG = {
   MAX_LOCK_TTL_SECONDS: 30,
   DEFAULT_CONTRACT_CAPACITY_RATIO: 0.8,
   DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS: 120_000,
+  DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
 } as const;
 
 // Pool Constants
@@ -38,22 +39,30 @@ export const POOL = {
 
 // Time Constants
 export const TIME = {
-  MAX_TIME_BOUND_OFFSET_SECONDS: 120,
+  MAX_TIME_BOUND_OFFSET_SECONDS: 60,
 } as const;
 
 // Simulation-related defaults
 export const SIMULATION = {
   DEFAULT_FEE: '100',
   MIN_TIME_BOUND: 0,
-  MAX_TIME_BOUND_OFFSET_SECONDS: 120,
-  MAX_FUTURE_TIME_BOUND_SECONDS: 120,
+  MAX_TIME_BOUND_OFFSET_SECONDS: 60,
+  MAX_FUTURE_TIME_BOUND_SECONDS: 60,
   SIMULATION_AUTH_MODE: 'enforce',
+  /** Minimum ledger margin required between latestLedger and auth signatureExpirationLedger. Must be > 1 since simulation already validates 1 ledger of validity. ~10s at ~5s/ledger. */
+  MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
+} as const;
+
+// Global plugin timeout budget
+export const TIMEOUT = {
+  DEFAULT_GLOBAL_TIMEOUT_MS: 30_000,
+  BUFFER_MS: 2_000,
 } as const;
 
 // Polling for transactionWait
 export const POLLING = {
   INTERVAL_MS: 1000,
-  TIMEOUT_MS: 25000,
+  DEFAULT_TIMEOUT_MS: 25_000,
 } as const;
 
 export const FEE = {

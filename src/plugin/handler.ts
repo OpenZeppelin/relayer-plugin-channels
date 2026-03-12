@@ -8,7 +8,7 @@
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 import type { PluginAPI, PluginKVStore, Relayer } from '@openzeppelin/relayer-sdk';
 import { PoolLock, ChannelPool, AcquireOptions } from './pool';
-import { loadConfig, getNetworkPassphrase } from './config';
+import { loadConfig, getNetworkPassphrase, type ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
@@ -32,7 +32,8 @@ interface PipelineContext {
   acquireOptions: AcquireOptions;
   fees: InclusionFees;
   tracker: FeeTracker | undefined;
-  sequenceNumberCacheMaxAgeMs: number;
+  config: ChannelAccountsConfig;
+  startTime: number;
 }
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
@@ -66,7 +67,11 @@ export function extractFuncAuthFromUnsignedXdr(
   };
 }
 
-async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<ChannelAccountsResponse> {
+async function handleXdrSubmit(
+  xdrStr: string,
+  ctx: PipelineContext,
+  skipWait?: boolean
+): Promise<ChannelAccountsResponse> {
   const tx = new Transaction(xdrStr, ctx.networkPassphrase);
 
   // Unsigned XDR: extract func+auth and route through channel path
@@ -87,7 +92,7 @@ async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<Ch
     // Update acquireOptions with contractId from extracted func
     const contractId = getContractIdFromFunc(extracted.func);
     const updatedOptions: AcquireOptions = { ...ctx.acquireOptions, contractId };
-    return handleFuncAuthSubmit(extracted.func, extracted.auth, { ...ctx, acquireOptions: updatedOptions });
+    return handleFuncAuthSubmit(extracted.func, extracted.auth, { ...ctx, acquireOptions: updatedOptions }, skipWait);
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx);
@@ -104,15 +109,19 @@ async function handleXdrSubmit(xdrStr: string, ctx: PipelineContext): Promise<Ch
     ctx.network,
     maxFee,
     ctx.api,
+    ctx.startTime,
     ctx.tracker,
-    submitContext
+    submitContext,
+    skipWait,
+    ctx.config
   );
 }
 
 async function handleFuncAuthSubmit(
   func: xdr.HostFunction,
   auth: xdr.SorobanAuthorizationEntry[],
-  ctx: PipelineContext
+  ctx: PipelineContext,
+  skipWait?: boolean
 ): Promise<ChannelAccountsResponse> {
   // Simulate once — used for both read-only detection and transaction assembly
   const simulation = await simulateTransaction(func, auth, ctx.fundAddress, ctx.fundRelayer, ctx.networkPassphrase);
@@ -154,7 +163,7 @@ async function handleFuncAuthSubmit(
       ctx.network,
       channelRelayer,
       channelInfo.address,
-      ctx.sequenceNumberCacheMaxAgeMs
+      ctx.config.sequenceNumberCacheMaxAgeMs
     );
 
     // Assemble the transaction using the cached simulation result — no second RPC call
@@ -163,7 +172,11 @@ async function handleFuncAuthSubmit(
       auth,
       { address: channelInfo.address, sequence },
       ctx.networkPassphrase,
-      simulation.rawSimResult
+      simulation.rawSimResult,
+      ctx.config.minSignatureExpirationLedgerBuffer
+    );
+    console.debug(
+      `[channels] After assembly: built.fee=${built.fee}, minResourceFee=${simulation.rawSimResult.minResourceFee}`
     );
 
     const signedTx = await signWithChannelAndFund(
@@ -176,6 +189,7 @@ async function handleFuncAuthSubmit(
     );
 
     const maxFee = calculateMaxFee(signedTx, ctx.acquireOptions.limitedContracts, ctx.fees);
+    console.debug(`[channels] After signing: signedTx.fee=${signedTx.fee}, maxFee=${maxFee}`);
     const contractId = getContractIdFromFunc(func);
     await ctx.tracker?.checkBudget(maxFee);
     const submitContext: SubmitContext = {
@@ -189,10 +203,19 @@ async function handleFuncAuthSubmit(
         ctx.network,
         maxFee,
         ctx.api,
+        ctx.startTime,
         ctx.tracker,
-        submitContext
+        submitContext,
+        skipWait,
+        ctx.config
       );
-      if (result.status === 'confirmed') {
+      if (result.status === 'pending' || result.status === 'sent' || result.status === 'submitted') {
+        // extend lock and clear sequence
+        console.log(`[channels]: extending lock and clearing sequence`);
+        await ctx.pool.extendLock(poolLock!);
+        await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+        poolLock = undefined; // skip release in finally
+      } else if (result.status === 'confirmed') {
         await commitSequence(ctx.kv, ctx.network, channelInfo.address, sequence);
       } else {
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
@@ -200,6 +223,11 @@ async function handleFuncAuthSubmit(
       return result;
     } catch (error: any) {
       await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+      if (error.code === 'WAIT_TIMEOUT' && poolLock) {
+        console.log(`[channels] Extending lock for WAIT_TIMEOUT error`);
+        await ctx.pool.extendLock(poolLock);
+        poolLock = undefined; // skip release in finally
+      }
       throw error;
     }
   } finally {
@@ -210,6 +238,7 @@ async function handleFuncAuthSubmit(
 }
 
 async function channelAccounts(context: PluginContext): Promise<ChannelAccountsResponse> {
+  const startTime = Date.now();
   const { api, kv, params, headers } = context;
 
   // Management branch: handle and return immediately
@@ -245,27 +274,50 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     });
   }
 
-  // 1. Validate and parse request (xdr OR func+auth)
+  // Validate and parse request (xdr OR func+auth)
   const request = validateAndParseRequest(params);
   console.debug(
     `[channels] Request type: ${request.type}, auth entries: ${request.type === 'func-auth' ? request.auth.length : 'N/A'}`
   );
 
-  // 2. Get fund relayer
-  const fundRelayer = api.useRelayer(config.fundRelayerId);
+  // Get fund relayer (use alternative fund relayer when requested)
+  let fundRelayerId = config.fundRelayerId;
+  if (request.fundRelayerId) {
+    if (!config.allowedFundRelayerIds.has(request.fundRelayerId)) {
+      throw pluginError(`Fund relayer '${request.fundRelayerId}' is not in the allowed list`, {
+        code: 'CONFIG_MISSING',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { fundRelayerId: request.fundRelayerId },
+      });
+    }
+    fundRelayerId = request.fundRelayerId;
+  }
+  const fundRelayer = api.useRelayer(fundRelayerId);
+
+  // 2a. Handle get-transaction early — no pool, channel, or simulation needed
+  if (request.type === 'get-transaction') {
+    const res = await (fundRelayer as Relayer).getTransaction({ transactionId: request.transactionId });
+    const stellar = res as { id: string; status: string; hash?: string };
+    return {
+      transactionId: stellar.id,
+      status: stellar.status,
+      hash: stellar.hash ?? null,
+    };
+  }
+
   const fundInfo = await fundRelayer.getRelayer();
   if (!fundInfo || !fundInfo.address) {
     throw pluginError('Fund relayer not found', {
       code: 'RELAYER_UNAVAILABLE',
       status: HTTP_STATUS.BAD_GATEWAY,
-      details: { relayerId: config.fundRelayerId },
+      details: { relayerId: fundRelayerId },
     });
   }
   if (fundInfo.network_type !== 'stellar') {
     throw pluginError('Fund relayer network type must be stellar', {
       code: 'UNSUPPORTED_NETWORK',
       status: HTTP_STATUS.BAD_REQUEST,
-      details: { network_type: fundInfo.network_type, relayerId: config.fundRelayerId },
+      details: { network_type: fundInfo.network_type, relayerId: fundRelayerId },
     });
   }
 
@@ -292,13 +344,14 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     acquireOptions,
     fees,
     tracker,
-    sequenceNumberCacheMaxAgeMs: config.sequenceNumberCacheMaxAgeMs,
+    config,
+    startTime,
   };
 
   // 5. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
-    return await handleXdrSubmit(request.xdr, ctx);
+    return await handleXdrSubmit(request.xdr, ctx, request.skipWait);
   }
 
   // Extract contractId for func+auth flow
@@ -306,7 +359,12 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   const funcAcquireOptions: AcquireOptions = { ...acquireOptions, contractId };
 
   console.log(`[channels] Flow: func+auth with channel account`);
-  return await handleFuncAuthSubmit(request.func, request.auth, { ...ctx, acquireOptions: funcAcquireOptions });
+  return await handleFuncAuthSubmit(
+    request.func,
+    request.auth,
+    { ...ctx, acquireOptions: funcAcquireOptions },
+    request.skipWait
+  );
 }
 
 /**
