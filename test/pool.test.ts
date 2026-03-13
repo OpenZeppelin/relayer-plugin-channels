@@ -151,9 +151,7 @@ describe('ChannelPool', () => {
     const setSpy = vi.spyOn(kv, 'set');
     await pool.releaseWithCooldown(wrongLock, 6000);
 
-    const cooldownCalls = setSpy.mock.calls.filter(
-      (c) => c[0] === `testnet:channel:in-use:${lock.relayerId}`
-    );
+    const cooldownCalls = setSpy.mock.calls.filter((c) => c[0] === `testnet:channel:in-use:${lock.relayerId}`);
     expect(cooldownCalls).toHaveLength(0);
   });
 
@@ -190,7 +188,7 @@ describe('ChannelPool', () => {
       pool.acquire(defaultOptions),
     ]);
 
-    const relayerIds = results.map(r => r.relayerId);
+    const relayerIds = results.map((r) => r.relayerId);
     expect(new Set(relayerIds).size).toBe(3);
 
     // Verify each token matches what's stored in KV
@@ -220,7 +218,11 @@ describe('ChannelPool', () => {
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
 
     // Pre-set p1's in-use key (simulating another worker claimed it after our scan)
-    await kv.set('testnet:channel:in-use:p1', { token: 'other-worker', lockedAt: new Date().toISOString() }, { ttlSec: 30 });
+    await kv.set(
+      'testnet:channel:in-use:p1',
+      { token: 'other-worker', lockedAt: new Date().toISOString() },
+      { ttlSec: 30 }
+    );
 
     const lock = await pool.acquire(defaultOptions);
     // p1 is already in-use (double-check inside claim rejects it), so p2 is acquired
@@ -238,13 +240,13 @@ describe('ChannelPool', () => {
     const promises = Array.from({ length: numWorkers }, () =>
       pool.acquire(defaultOptions).then(
         (lock) => ({ ok: true as const, lock }),
-        (err) => ({ ok: false as const, err }),
+        (err) => ({ ok: false as const, err })
       )
     );
 
     const results = await Promise.all(promises);
-    const successes = results.filter(r => r.ok).map(r => (r as any).lock);
-    const failures = results.filter(r => !r.ok);
+    const successes = results.filter((r) => r.ok).map((r) => (r as any).lock);
+    const failures = results.filter((r) => !r.ok);
 
     // Exactly numChannels should succeed
     expect(successes.length).toBe(numChannels);

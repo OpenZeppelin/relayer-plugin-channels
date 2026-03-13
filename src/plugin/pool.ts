@@ -86,17 +86,17 @@ export class ChannelPool {
         this.kv.get<Record<string, number>>(this.lruMapKey()),
       ]);
       lruMap = lruMapRaw ?? {};
-      lockedSet = new Set(lockedKeys.map(k => k.slice(lockPrefix.length)));
+      lockedSet = new Set(lockedKeys.map((k) => k.slice(lockPrefix.length)));
     } catch (err) {
       // Fallback: if listKeys fails, degrade to O(N) per-channel exists checks.
       // This is expensive with many channels — log so persistent failures are observable.
       console.warn('[channels] listKeys failed, falling back to per-channel exists checks', err);
       lruMap = {};
-      const results = await Promise.all(ids.map(id => this.kv.exists(this.lockKey(id))));
+      const results = await Promise.all(ids.map((id) => this.kv.exists(this.lockKey(id))));
       lockedSet = new Set(ids.filter((_, i) => results[i]));
     }
 
-    const unlocked = ids.filter(id => !lockedSet.has(id));
+    const unlocked = ids.filter((id) => !lockedSet.has(id));
     if (unlocked.length === 0) return null;
 
     // Sort by LRU ascending — oldest channel is always first (deterministic).
@@ -127,7 +127,7 @@ export class ChannelPool {
         await this.kv.set(
           this.lockKey(relayerId),
           { token, lockedAt: new Date().toISOString() },
-          { ttlSec: this.channelLockTtlSec },
+          { ttlSec: this.channelLockTtlSec }
         );
 
         // Best-effort LRU update — re-fetch the map to minimize last-writer-wins
@@ -135,14 +135,16 @@ export class ChannelPool {
         // claiming different channels can still race on get→set, but the window is
         // narrow. Only affects ordering precision, not claim correctness.
         try {
-          const freshLru = await this.kv.get<Record<string, number>>(this.lruMapKey()) ?? {};
+          const freshLru = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
           freshLru[relayerId] = Date.now();
           await this.kv.set(this.lruMapKey(), freshLru, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
-        } catch { /* ordering-only */ }
+        } catch {
+          /* ordering-only */
+        }
 
         return { relayerId, token };
       },
-      { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' },
+      { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' }
     );
   }
 
