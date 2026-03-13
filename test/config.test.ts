@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { Networks } from '@stellar/stellar-sdk';
 import { loadConfig, getNetworkPassphrase } from '../src/plugin/config';
+import { POLLING, TIMEOUT } from '../src/plugin/constants';
 
 const env = process.env;
 
@@ -169,5 +170,32 @@ describe('config', () => {
 
     process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = 'invalid';
     expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+  });
+
+  test('timeout config uses defaults and parses valid custom values', () => {
+    delete process.env.PLUGIN_GLOBAL_TIMEOUT_MS;
+    delete process.env.PLUGIN_POLLING_TIMEOUT_MS;
+    expect(loadConfig().globalTimeoutMs).toBe(TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS);
+    expect(loadConfig().pollingTimeoutMs).toBe(POLLING.DEFAULT_TIMEOUT_MS);
+
+    process.env.PLUGIN_GLOBAL_TIMEOUT_MS = '45000.8';
+    process.env.PLUGIN_POLLING_TIMEOUT_MS = '12000.1';
+    const cfg = loadConfig();
+    expect(cfg.globalTimeoutMs).toBe(45000);
+    expect(cfg.pollingTimeoutMs).toBe(12000);
+  });
+
+  test('timeout config falls back to defaults for invalid values', () => {
+    process.env.PLUGIN_GLOBAL_TIMEOUT_MS = '0';
+    process.env.PLUGIN_POLLING_TIMEOUT_MS = '-100';
+    let cfg = loadConfig();
+    expect(cfg.globalTimeoutMs).toBe(TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS);
+    expect(cfg.pollingTimeoutMs).toBe(POLLING.DEFAULT_TIMEOUT_MS);
+
+    process.env.PLUGIN_GLOBAL_TIMEOUT_MS = 'invalid';
+    process.env.PLUGIN_POLLING_TIMEOUT_MS = '';
+    cfg = loadConfig();
+    expect(cfg.globalTimeoutMs).toBe(TIMEOUT.DEFAULT_GLOBAL_TIMEOUT_MS);
+    expect(cfg.pollingTimeoutMs).toBe(POLLING.DEFAULT_TIMEOUT_MS);
   });
 });

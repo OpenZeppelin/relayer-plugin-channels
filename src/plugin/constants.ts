@@ -60,14 +60,14 @@ export const SIMULATION = {
 
 // Global plugin timeout budget
 export const TIMEOUT = {
-  GLOBAL_TIMEOUT_MS: 30_000,
+  DEFAULT_GLOBAL_TIMEOUT_MS: 30_000,
   BUFFER_MS: 2_000,
 } as const;
 
 // Polling for transactionWait
 export const POLLING = {
   INTERVAL_MS: 1000,
-  TIMEOUT_MS: 25_000,
+  DEFAULT_TIMEOUT_MS: 25_000,
 } as const;
 
 export const FEE = {
