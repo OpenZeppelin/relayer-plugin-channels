@@ -304,7 +304,7 @@ async function getLockedRelayerIds(kv: PluginKVStore, network: 'testnet' | 'main
     throw pluginError('KV error while checking relayer locks', {
       code: 'KV_ERROR',
       status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-      details: { message: error instanceof Error ? error.message : String(error) },
+      details: { prefix, pattern: `${prefix}*`, message: error instanceof Error ? error.message : String(error) },
     });
   }
 }

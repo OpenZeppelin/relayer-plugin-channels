@@ -49,11 +49,15 @@ export class FakeKV implements PluginKVStore {
       throw new Error('lock busy');
     }
     const ttl = opts?.ttlSec && opts.ttlSec > 0 ? opts.ttlSec : 1;
-    this.store.set(key, { value: { token: 'lock' }, expiresAt: now + ttl * 1000 });
+    const token = `${key}:${now}:${Math.random()}`;
+    this.store.set(key, { value: { token }, expiresAt: now + ttl * 1000 });
     try {
       return await fn();
     } finally {
-      this.store.delete(key);
+      const current = this.store.get(key);
+      if (current?.value?.token === token) {
+        this.store.delete(key);
+      }
     }
   }
 

@@ -25,7 +25,7 @@ describe('ChannelPool', () => {
     expect(err.code).toBe('POOL_CAPACITY');
     expect(err.status).toBe(503);
     expect(err.details).toMatchObject({
-      reason: 'all_channels_busy_or_mutex_contention',
+      reason: 'all_channels_busy_or_claim_contention',
     });
 
     // Release one and ensure lock key gone
@@ -196,6 +196,72 @@ describe('ChannelPool', () => {
       const stored = await kv.get<{ token: string }>(`testnet:channel:in-use:${lock.relayerId}`);
       expect(stored?.token).toBe(lock.token);
     }
+
+    const lruMap = await kv.get<Record<string, number>>('testnet:channel:lru-map');
+    expect(lruMap).not.toBeNull();
+    expect(Object.keys(lruMap ?? {})).toEqual(expect.arrayContaining(results.map((r) => r.relayerId)));
+  });
+
+  test('LRU read failure does not trigger per-channel fallback scan', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
+
+    const getSpy = vi.spyOn(kv, 'get');
+    getSpy.mockImplementation(async (key: string) => {
+      if (key === 'testnet:channel:lru-map') {
+        throw new Error('LRU unavailable');
+      }
+      return FakeKV.prototype.get.call(kv, key);
+    });
+
+    const existsSpy = vi.spyOn(kv, 'exists');
+    const lock = await pool.acquire(defaultOptions);
+
+    expect(existsSpy).toHaveBeenCalledTimes(1);
+    expect(['p1', 'p2']).toContain(lock.relayerId);
+  });
+
+  test('FakeKV lock helper only removes the lock it owns after TTL expiry', async () => {
+    const kv = new FakeKV();
+    let firstEntered = false;
+    let releaseFirst!: () => void;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = kv.withLock(
+      'race-lock',
+      async () => {
+        firstEntered = true;
+        await firstDone;
+        return 'first';
+      },
+      { ttlSec: 1 }
+    );
+
+    while (!firstEntered) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const second = kv.withLock(
+      'race-lock',
+      async () => {
+        const current = await kv.get<{ token: string }>('race-lock');
+        expect(current?.token).toContain('race-lock');
+        releaseFirst();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const stillHeld = await kv.get<{ token: string }>('race-lock');
+        expect(stillHeld?.token).toBe(current?.token);
+        return 'second';
+      },
+      { ttlSec: 1 }
+    );
+
+    await expect(first).resolves.toBe('first');
+    await expect(second).resolves.toBe('second');
   });
 
   test('claim-busy fallback: skips busy claim lock and tries next candidate', async () => {

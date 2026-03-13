@@ -21,7 +21,7 @@ export type AcquireOptions = {
 
 type MembershipDoc = { relayerIds: string[] };
 type PoolCapacityDetails = {
-  reason: 'limited_contract_capacity' | 'all_channels_busy_or_mutex_contention';
+  reason: 'limited_contract_capacity' | 'all_channels_busy_or_claim_contention';
   contractId?: string;
   capacityRatio: number;
   maxSpins: number;
@@ -78,20 +78,21 @@ export class ChannelPool {
     }
 
     const lockPrefix = this.lockKeyPrefix();
-    let lockedSet: Set<string>;
-    let lruMap: Record<string, number>;
+    let lruMap: Record<string, number> = {};
     try {
-      const [lockedKeys, lruMapRaw] = await Promise.all([
-        this.kv.listKeys(`${lockPrefix}*`),
-        this.kv.get<Record<string, number>>(this.lruMapKey()),
-      ]);
-      lruMap = lruMapRaw ?? {};
+      lruMap = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
+    } catch (err) {
+      console.warn('[channels] LRU map read failed, using empty ordering map', err);
+    }
+
+    let lockedSet: Set<string>;
+    try {
+      const lockedKeys = await this.kv.listKeys(`${lockPrefix}*`);
       lockedSet = new Set(lockedKeys.map((k) => k.slice(lockPrefix.length)));
     } catch (err) {
       // Fallback: if listKeys fails, degrade to O(N) per-channel exists checks.
       // This is expensive with many channels — log so persistent failures are observable.
       console.warn('[channels] listKeys failed, falling back to per-channel exists checks', err);
-      lruMap = {};
       const results = await Promise.all(ids.map((id) => this.kv.exists(this.lockKey(id))));
       lockedSet = new Set(ids.filter((_, i) => results[i]));
     }
@@ -130,17 +131,7 @@ export class ChannelPool {
           { ttlSec: this.channelLockTtlSec }
         );
 
-        // Best-effort LRU update — re-fetch the map to minimize last-writer-wins
-        // staleness (the read-phase copy may be many retries old). Concurrent workers
-        // claiming different channels can still race on get→set, but the window is
-        // narrow. Only affects ordering precision, not claim correctness.
-        try {
-          const freshLru = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
-          freshLru[relayerId] = Date.now();
-          await this.kv.set(this.lruMapKey(), freshLru, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
-        } catch {
-          /* ordering-only */
-        }
+        await this.updateLruMap(relayerId);
 
         return { relayerId, token };
       },
@@ -212,6 +203,32 @@ export class ChannelPool {
     return `${this.network}:channel:lru-map`;
   }
 
+  private lruMapUpdateLockKey(): string {
+    return `${this.network}:channel:lru-map:update`;
+  }
+
+  private async updateLruMap(relayerId: string): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      try {
+        const updated = await this.kv.withLock(
+          this.lruMapUpdateLockKey(),
+          async () => {
+            const freshLru = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
+            freshLru[relayerId] = Date.now();
+            await this.kv.set(this.lruMapKey(), freshLru, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
+            return true;
+          },
+          { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' }
+        );
+        if (updated) return;
+      } catch {
+        // ordering-only
+        return;
+      }
+      await sleep(1);
+    }
+  }
+
   private async getRelayerIdsFromKV(): Promise<string[]> {
     try {
       const doc = await this.kv.get<MembershipDoc>(this.membershipKey());
@@ -228,7 +245,7 @@ export class ChannelPool {
     const isLimited = !!(options.contractId && options.limitedContracts.has(options.contractId));
 
     return {
-      reason: isLimited ? 'limited_contract_capacity' : 'all_channels_busy_or_mutex_contention',
+      reason: isLimited ? 'limited_contract_capacity' : 'all_channels_busy_or_claim_contention',
       contractId: options.contractId,
       capacityRatio: options.capacityRatio,
       maxSpins,
