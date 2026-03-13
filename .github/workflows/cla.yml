@@ -37,10 +37,11 @@ jobs:
       - name: Read Allowlist File
         id: read_allowlist
         run: |
+          delimiter="$(openssl rand -hex 16)"
           {
-            echo 'allowlist<<EOF'
+            echo "allowlist<<${delimiter}"
             cat allowlist.txt
-            echo 'EOF'
+            echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
 
       - name: 'CLA Assistant'
