@@ -223,7 +223,7 @@ export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 
 # Optional environment variables
 # Comma-separated list of allowed alternative fund relayers (e.g., for x402 or similar flows)
-export ALLOWED_FUND_RELAYER_IDS="x402-channels-fund" 
+export ALLOWED_FUND_RELAYER_IDS="x402-channels-fund"
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
 
 # Fee tracking (optional)

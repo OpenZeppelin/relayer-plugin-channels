@@ -263,7 +263,7 @@ describe('handler sequence cache lifecycle', () => {
     expect(poolSpies.release).not.toHaveBeenCalled();
   });
 
-  test('releases lock normally on ONCHAIN_FAILED errors', async () => {
+  test('releases with cooldown on ONCHAIN_FAILED errors', async () => {
     const err = new Error('TxFailed') as any;
     err.code = 'ONCHAIN_FAILED';
     mockSubmit.mockRejectedValue(err);
@@ -272,8 +272,8 @@ describe('handler sequence cache lifecycle', () => {
     await expect(handler(ctx)).rejects.toMatchObject({ code: 'ONCHAIN_FAILED' });
 
     expect(poolSpies.extendLock).not.toHaveBeenCalled();
-    expect(poolSpies.releaseWithCooldown).not.toHaveBeenCalled();
-    expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    expect(poolSpies.release).not.toHaveBeenCalled();
+    expect(poolSpies.releaseWithCooldown).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
   });
 
   test('releases lock normally on success', async () => {

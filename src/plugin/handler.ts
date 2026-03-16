@@ -138,7 +138,7 @@ async function handleFuncAuthSubmit(
   }
 
   let poolLock: PoolLock | undefined;
-  let uncertainOutcome = false;
+  let needsCooldown = false;
   try {
     poolLock = await ctx.pool.acquire(ctx.acquireOptions);
     const channelRelayer = ctx.api.useRelayer(poolLock.relayerId);
@@ -220,7 +220,7 @@ async function handleFuncAuthSubmit(
       } else {
         // Unknown status — uncertain outcome → release with cooldown
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
-        uncertainOutcome = true;
+        needsCooldown = true;
       }
       return result;
     } catch (error: any) {
@@ -230,12 +230,16 @@ async function handleFuncAuthSubmit(
         console.log(`[channels] Extending lock for WAIT_TIMEOUT error`);
         await ctx.pool.extendLock(poolLock);
         poolLock = undefined; // skip release in finally
+      } else if (error.code === 'ONCHAIN_FAILED') {
+        // Sequence was consumed (tx landed on chain) — cooldown prevents
+        // next acquirer from hitting stale RPC and reusing old sequence
+        needsCooldown = true;
       }
       throw error;
     }
   } finally {
     if (poolLock) {
-      if (uncertainOutcome) {
+      if (needsCooldown) {
         await ctx.pool.releaseWithCooldown(poolLock);
       } else {
         await ctx.pool.release(poolLock);

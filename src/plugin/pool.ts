@@ -203,29 +203,14 @@ export class ChannelPool {
     return `${this.network}:channel:lru-map`;
   }
 
-  private lruMapUpdateLockKey(): string {
-    return `${this.network}:channel:lru-map:update`;
-  }
-
   private async updateLruMap(relayerId: string): Promise<void> {
-    for (let i = 0; i < 5; i++) {
-      try {
-        const updated = await this.kv.withLock(
-          this.lruMapUpdateLockKey(),
-          async () => {
-            const freshLru = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
-            freshLru[relayerId] = Date.now();
-            await this.kv.set(this.lruMapKey(), freshLru, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
-            return true;
-          },
-          { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' }
-        );
-        if (updated) return;
-      } catch {
-        // ordering-only
-        return;
-      }
-      await sleep(1);
+    try {
+      const lruMap = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
+      lruMap[relayerId] = Date.now();
+      await this.kv.set(this.lruMapKey(), lruMap, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
+    } catch (err) {
+      console.debug('[channels] failed to update LRU map', err);
+      // Best-effort: stale LRU map only affects ordering, not correctness
     }
   }
 
