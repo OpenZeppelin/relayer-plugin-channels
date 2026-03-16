@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.18.0
+
+### Minor Changes
+
+- 016b145: feat: LRU channel acquisition with per-channel claim locks (#107)
+
 ## 0.17.0
 
 ### Minor Changes
