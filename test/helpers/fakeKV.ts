@@ -39,23 +39,41 @@ export class FakeKV implements PluginKVStore {
     fn: () => Promise<T>,
     opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }
   ): Promise<T | null> {
-    // Simple, non-reentrant lock for testing; not robust
-    if (await this.exists(key)) {
+    // Synchronous check-and-set to simulate atomic lock acquisition.
+    // Using await between check and set would allow interleaving in Promise.all.
+    const now = Date.now();
+    const entry = this.store.get(key);
+    const isLocked = entry && (!entry.expiresAt || entry.expiresAt > now);
+    if (isLocked) {
       if (opts?.onBusy === 'skip') return null;
       throw new Error('lock busy');
     }
-    // Respect requested TTL to better emulate production behavior
     const ttl = opts?.ttlSec && opts.ttlSec > 0 ? opts.ttlSec : 1;
-    await this.set(key, { token: 'lock' }, { ttlSec: ttl });
+    const token = `${key}:${now}:${Math.random()}`;
+    this.store.set(key, { value: { token }, expiresAt: now + ttl * 1000 });
     try {
       return await fn();
     } finally {
-      await this.del(key);
+      const current = this.store.get(key);
+      if (current?.value?.token === token) {
+        this.store.delete(key);
+      }
     }
   }
 
-  async listKeys(_pattern?: string): Promise<string[]> {
-    return Array.from(this.store.keys());
+  async listKeys(pattern?: string): Promise<string[]> {
+    const now = Date.now();
+    const prefix = pattern?.endsWith('*') ? pattern.slice(0, -1) : undefined;
+    const keys: string[] = [];
+    for (const [key, entry] of this.store) {
+      if (entry.expiresAt && entry.expiresAt <= now) {
+        this.store.delete(key);
+        continue;
+      }
+      if (prefix && !key.startsWith(prefix)) continue;
+      keys.push(key);
+    }
+    return keys;
   }
 
   async clear(): Promise<number> {

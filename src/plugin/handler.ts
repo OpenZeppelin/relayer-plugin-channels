@@ -138,6 +138,7 @@ async function handleFuncAuthSubmit(
   }
 
   let poolLock: PoolLock | undefined;
+  let needsCooldown = false;
   try {
     poolLock = await ctx.pool.acquire(ctx.acquireOptions);
     const channelRelayer = ctx.api.useRelayer(poolLock.relayerId);
@@ -210,7 +211,6 @@ async function handleFuncAuthSubmit(
         ctx.config
       );
       if (result.status === 'pending' || result.status === 'sent' || result.status === 'submitted') {
-        // extend lock and clear sequence
         console.log(`[channels]: extending lock and clearing sequence`);
         await ctx.pool.extendLock(poolLock!);
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
@@ -218,21 +218,32 @@ async function handleFuncAuthSubmit(
       } else if (result.status === 'confirmed') {
         await commitSequence(ctx.kv, ctx.network, channelInfo.address, sequence);
       } else {
+        // Unknown status — uncertain outcome → release with cooldown
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+        needsCooldown = true;
       }
       return result;
     } catch (error: any) {
       await clearSequence(ctx.kv, ctx.network, channelInfo.address);
+
       if (error.code === 'WAIT_TIMEOUT' && poolLock) {
         console.log(`[channels] Extending lock for WAIT_TIMEOUT error`);
         await ctx.pool.extendLock(poolLock);
         poolLock = undefined; // skip release in finally
+      } else if (error.code === 'ONCHAIN_FAILED') {
+        // Sequence was consumed (tx landed on chain) — cooldown prevents
+        // next acquirer from hitting stale RPC and reusing old sequence
+        needsCooldown = true;
       }
       throw error;
     }
   } finally {
     if (poolLock) {
-      await ctx.pool.release(poolLock);
+      if (needsCooldown) {
+        await ctx.pool.releaseWithCooldown(poolLock);
+      } else {
+        await ctx.pool.release(poolLock);
+      }
     }
   }
 }

@@ -245,9 +245,9 @@ describe('management', () => {
   test('stats returns undefined locked/available on lock check failure', async () => {
     const kv = new FakeKV();
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['a', 'b'] });
-    // Make exists throw
-    const origExists = kv.exists.bind(kv);
-    kv.exists = () => {
+    // Make listKeys throw
+    const origListKeys = kv.listKeys.bind(kv);
+    kv.listKeys = () => {
       throw new Error('KV unavailable');
     };
 
@@ -261,7 +261,7 @@ describe('management', () => {
     expect(result.pool.locked).toBeUndefined();
     expect(result.pool.available).toBeUndefined();
 
-    kv.exists = origExists;
+    kv.listKeys = origListKeys;
   });
 
   test('stats includes config and fees', async () => {

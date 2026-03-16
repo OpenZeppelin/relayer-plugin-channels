@@ -29,12 +29,17 @@ export const CONFIG = {
 
 // Pool Constants
 export const POOL = {
-  // TTL for the short global mutex guarding acquire()
-  MUTEX_TTL_SECONDS: 1,
-  // Retry policy when mutex is busy
-  MUTEX_MAX_SPINS: 30,
-  MUTEX_RETRY_MIN_MS: 10,
-  MUTEX_RETRY_MAX_MS: 30,
+  // Per-channel claim lock TTL — must exceed worst-case callback latency
+  // to prevent TTL expiry allowing a second worker into the same claim section
+  CLAIM_LOCK_TTL_SECONDS: 3,
+  // Retry policy when all candidates busy
+  ACQUIRE_MAX_SPINS: 30,
+  ACQUIRE_RETRY_MIN_MS: 10,
+  ACQUIRE_RETRY_MAX_MS: 30,
+  // Hard-block cooldown for uncertain-outcome channels (~1 Stellar ledger with margin)
+  CHANNEL_COOLDOWN_MS: 6_000,
+  // Housekeeping TTL for the single LRU map document
+  LRU_MAP_TTL_SECONDS: 86_400,
 } as const;
 
 // Time Constants

@@ -4,7 +4,7 @@
  * KV-backed, stateless channel pool.
  * - Membership comes from KV: <network>:channel:relayer-ids
  * - Per-relayer locks with tokens: <network>:channel:in-use:<relayerId>
- * - Uses a short global mutex to make acquire atomic across workers.
+ * - Uses per-channel claim locks to make acquire safe across workers.
  */
 
 import { PluginKVStore, pluginError } from '@openzeppelin/relayer-sdk';
@@ -21,7 +21,7 @@ export type AcquireOptions = {
 
 type MembershipDoc = { relayerIds: string[] };
 type PoolCapacityDetails = {
-  reason: 'limited_contract_capacity' | 'all_channels_busy_or_mutex_contention';
+  reason: 'limited_contract_capacity' | 'all_channels_busy_or_claim_contention';
   contractId?: string;
   capacityRatio: number;
   maxSpins: number;
@@ -29,32 +29,27 @@ type PoolCapacityDetails = {
 
 export class ChannelPool {
   private readonly network: 'testnet' | 'mainnet';
-  private readonly globalLockKey: string;
   private readonly channelLockTtlSec: number;
-  private readonly mutexTtlSec: number;
   private readonly kv: PluginKVStore;
 
   constructor(network: 'testnet' | 'mainnet', kv: PluginKVStore, lockTtlSeconds: number) {
     this.network = network;
     this.kv = kv;
-    this.globalLockKey = `${this.network}:channel-pool-lock`;
     this.channelLockTtlSec = lockTtlSeconds;
-    this.mutexTtlSec = POOL.MUTEX_TTL_SECONDS;
   }
 
   /** Acquire a relayerId with a token lock */
   async acquire(options: AcquireOptions): Promise<PoolLock> {
-    const maxSpins = POOL.MUTEX_MAX_SPINS;
+    const maxSpins = POOL.ACQUIRE_MAX_SPINS;
 
     for (let i = 0; i < maxSpins; i++) {
-      const r = await this.withGlobalMutex(() => this.tryLockAnyRelayer(options));
-      if (r === null) {
-        const jitter =
-          POOL.MUTEX_RETRY_MIN_MS + Math.floor(Math.random() * (POOL.MUTEX_RETRY_MAX_MS - POOL.MUTEX_RETRY_MIN_MS + 1));
-        await sleep(jitter);
-        continue;
-      }
-      return r;
+      const result = await this.tryAcquire(options);
+      if (result) return result;
+
+      const jitter =
+        POOL.ACQUIRE_RETRY_MIN_MS +
+        Math.floor(Math.random() * (POOL.ACQUIRE_RETRY_MAX_MS - POOL.ACQUIRE_RETRY_MIN_MS + 1));
+      await sleep(jitter);
     }
 
     const diagnostics = await this.getPoolCapacityDetails(options, maxSpins);
@@ -67,13 +62,9 @@ export class ChannelPool {
     });
   }
 
-  // Run a function under the short-lived global mutex; returns null if busy
-  private async withGlobalMutex<T>(fn: () => Promise<T>): Promise<T | null> {
-    return this.kv.withLock(this.globalLockKey, fn, { ttlSec: this.mutexTtlSec, onBusy: 'skip' });
-  }
-
-  // Inside the mutex: pick an available relayer and set its channel lock
-  private async tryLockAnyRelayer(options: AcquireOptions): Promise<PoolLock | null> {
+  /** Read phase + claim phase (no global mutex) */
+  private async tryAcquire(options: AcquireOptions): Promise<PoolLock | null> {
+    // --- READ PHASE (no lock) ---
     let ids = await this.getRelayerIdsFromKV();
     if (ids.length === 0) {
       throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
@@ -82,22 +73,70 @@ export class ChannelPool {
       });
     }
 
-    // If contract is limited, filter to allowed subset
     if (options.contractId && options.limitedContracts.has(options.contractId)) {
       ids = filterChannelsForLimitedContract(ids, options.capacityRatio);
     }
 
-    shuffle(ids);
-    for (const relayerId of ids) {
-      const key = this.lockKey(relayerId);
-      const exists = await this.kv.exists(key);
-      if (exists) continue;
-      const token = randomToken();
-      const entry = { token, lockedAt: new Date().toISOString() };
-      await this.kv.set(key, entry, { ttlSec: this.channelLockTtlSec });
-      return { relayerId, token };
+    const lockPrefix = this.lockKeyPrefix();
+    let lruMap: Record<string, number> = {};
+    try {
+      lruMap = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
+    } catch (err) {
+      console.warn('[channels] LRU map read failed, using empty ordering map', err);
     }
+
+    let lockedSet: Set<string>;
+    try {
+      const lockedKeys = await this.kv.listKeys(`${lockPrefix}*`);
+      lockedSet = new Set(lockedKeys.map((k) => k.slice(lockPrefix.length)));
+    } catch (err) {
+      // Fallback: if listKeys fails, degrade to O(N) per-channel exists checks.
+      // This is expensive with many channels — log so persistent failures are observable.
+      console.warn('[channels] listKeys failed, falling back to per-channel exists checks', err);
+      const results = await Promise.all(ids.map((id) => this.kv.exists(this.lockKey(id))));
+      lockedSet = new Set(ids.filter((_, i) => results[i]));
+    }
+
+    const unlocked = ids.filter((id) => !lockedSet.has(id));
+    if (unlocked.length === 0) return null;
+
+    // Sort by LRU ascending — oldest channel is always first (deterministic).
+    // Shuffle-then-stable-sort: tie-break among equal timestamps is random,
+    // spreading contention when multiple channels share the same LRU value.
+    shuffle(unlocked);
+    unlocked.sort((a, b) => (lruMap[a] ?? 0) - (lruMap[b] ?? 0));
+    const candidates = unlocked;
+
+    // --- CLAIM PHASE (per-channel lock) ---
+    for (const candidate of candidates) {
+      const result = await this.tryClaimChannel(candidate);
+      if (result) return result;
+    }
+
     return null;
+  }
+
+  /** Attempt to claim a single channel under its per-channel lock */
+  private async tryClaimChannel(relayerId: string): Promise<PoolLock | null> {
+    return this.kv.withLock(
+      this.claimKey(relayerId),
+      async () => {
+        // Double-check: another worker may have claimed it between our scan and this lock
+        if (await this.kv.exists(this.lockKey(relayerId))) return null;
+
+        const token = randomToken();
+        await this.kv.set(
+          this.lockKey(relayerId),
+          { token, lockedAt: new Date().toISOString() },
+          { ttlSec: this.channelLockTtlSec }
+        );
+
+        await this.updateLruMap(relayerId);
+
+        return { relayerId, token };
+      },
+      { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' }
+    );
   }
 
   /** Extend the lock TTL if we still own it (e.g. after WAIT_TIMEOUT) */
@@ -130,12 +169,49 @@ export class ChannelPool {
     }
   }
 
+  /** Release with cooldown: keeps lock alive with short TTL to hard-block the channel. */
+  async releaseWithCooldown(lock: PoolLock, cooldownMs = POOL.CHANNEL_COOLDOWN_MS): Promise<void> {
+    try {
+      const key = this.lockKey(lock.relayerId);
+      const current = await this.kv.get<{ token?: string }>(key);
+      if (current?.token === lock.token) {
+        const cooldownSec = Math.max(1, Math.ceil(cooldownMs / 1000));
+        await this.kv.set(key, current, { ttlSec: cooldownSec });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   private membershipKey(): string {
     return `${this.network}:channel:relayer-ids`;
   }
 
+  private lockKeyPrefix(): string {
+    return `${this.network}:channel:in-use:`;
+  }
+
   private lockKey(relayerId: string): string {
-    return `${this.network}:channel:in-use:${relayerId}`;
+    return `${this.lockKeyPrefix()}${relayerId}`;
+  }
+
+  private claimKey(relayerId: string): string {
+    return `${this.network}:channel:claim:${relayerId}`;
+  }
+
+  private lruMapKey(): string {
+    return `${this.network}:channel:lru-map`;
+  }
+
+  private async updateLruMap(relayerId: string): Promise<void> {
+    try {
+      const lruMap = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
+      lruMap[relayerId] = Date.now();
+      await this.kv.set(this.lruMapKey(), lruMap, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
+    } catch (err) {
+      console.debug('[channels] failed to update LRU map', err);
+      // Best-effort: stale LRU map only affects ordering, not correctness
+    }
   }
 
   private async getRelayerIdsFromKV(): Promise<string[]> {
@@ -154,7 +230,7 @@ export class ChannelPool {
     const isLimited = !!(options.contractId && options.limitedContracts.has(options.contractId));
 
     return {
-      reason: isLimited ? 'limited_contract_capacity' : 'all_channels_busy_or_mutex_contention',
+      reason: isLimited ? 'limited_contract_capacity' : 'all_channels_busy_or_claim_contention',
       contractId: options.contractId,
       capacityRatio: options.capacityRatio,
       maxSpins,
