@@ -314,12 +314,18 @@ export class ChannelsClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private parseAxiosError(error: unknown): PluginResponse<any> | never {
     if (axios.isAxiosError(error)) {
-      if (error.response?.data) {
-        // HTTP error with response body - return it for further processing
+      if (error.response?.data && typeof error.response.data === 'object') {
+        // HTTP error with JSON response body - return it for further processing
         return error.response.data;
       }
-      // Network/transport error without response body
-      throw new PluginTransportError(`Network error: ${error.message}`, error.response?.status, error);
+      // Network/transport error or non-JSON response body (e.g. HTML error page from proxy)
+      const status = error.response?.status;
+      const body = error.response?.data ? String(error.response.data).slice(0, 200) : 'no response body';
+      throw new PluginTransportError(
+        `HTTP ${status ?? 'network'} error: ${error.message} (body: ${body})`,
+        status,
+        error
+      );
     }
     // Unknown error type
     throw new PluginUnexpectedError(
