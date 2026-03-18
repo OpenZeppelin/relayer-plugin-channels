@@ -129,10 +129,9 @@ async function buildSignedSelfPayment(
   rpcServer: rpc.Server,
   passphrase: string,
   address: string,
-  keypair: Keypair,
-  sequenceOverride?: string
+  keypair: Keypair
 ) {
-  const account = sequenceOverride ? new Account(address, sequenceOverride) : await rpcServer.getAccount(address);
+  const account = await rpcServer.getAccount(address);
   const tx = new TransactionBuilder(account, { fee: '100', networkPassphrase: passphrase })
     .addOperation(
       Operation.payment({ source: address, destination: address, asset: Asset.native(), amount: '0.0000010' })
@@ -252,8 +251,6 @@ async function main() {
     address: string;
     contractId: string;
     debug: boolean;
-    /** When running with concurrency > 1, each run gets a unique sequence to avoid duplicate tx hashes */
-    sequenceOverride?: string;
   };
   const ctx: Ctx = { client, rpc: rpcServer, passphrase, keypair, address, contractId, debug };
 
@@ -261,8 +258,8 @@ async function main() {
     {
       id: 'xdr-payment',
       label: 'XDR submit-only: signed self-payment',
-      run: async ({ client, rpc, passphrase, address, keypair, debug, sequenceOverride }) => {
-        const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair, sequenceOverride);
+      run: async ({ client, rpc, passphrase, address, keypair, debug }) => {
+        const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair);
         const res = await client.submitTransaction({ xdr: tx.toXDR() });
         printResult('xdr-payment', { success: true, data: res }, debug);
       },
@@ -335,18 +332,14 @@ async function main() {
       `📊 Running ${selected.length} test${selected.length > 1 ? 's' : ''} with ${concurrency}x concurrency...\n`
     );
     for (const t of selected) {
-      console.log(`📋 ${t.label} (x${concurrency} parallel)...`);
+      // Signed XDR uses a fixed source account — Stellar requires strict sequence ordering,
+      // so parallel submission from the same account always fails. Run these x1.
+      const effectiveConcurrency = t.id === 'xdr-payment' ? 1 : concurrency;
+      const mode = effectiveConcurrency === 1 ? 'x1, signed XDR' : `x${concurrency} parallel`;
+      console.log(`📋 ${t.label} (${mode})...`);
       const testStart = Date.now();
-      // For xdr-payment, pre-fetch account so each parallel run gets a unique sequence (avoid duplicate hashes)
-      const needsUniqueSeq = t.id === 'xdr-payment';
-      // eslint-disable-next-line prettier/prettier
-      const baseSeq = needsUniqueSeq
-        ? (await rpcServer.getAccount(address)).sequenceNumber()
-        : undefined;
-      const promises = Array.from({ length: concurrency }, (_, i) => {
-        const runCtx: Ctx =
-          needsUniqueSeq && baseSeq ? { ...ctx, sequenceOverride: (BigInt(baseSeq) + BigInt(i)).toString() } : ctx;
-        return t.run(runCtx).then(
+      const promises = Array.from({ length: effectiveConcurrency }, (_, i) => {
+        return t.run(ctx).then(
           () => ({ index: i, success: true, error: null }),
           (err) => ({ index: i, success: false, error: err })
         );
