@@ -5,6 +5,7 @@
  * - Membership comes from KV: <network>:channel:relayer-ids
  * - Per-relayer locks with tokens: <network>:channel:in-use:<relayerId>
  * - Uses per-channel claim locks to make acquire safe across workers.
+ * - LRU ordering via per-channel keys: <network>:channel:lru:<relayerId>
  */
 
 import { PluginKVStore, pluginError } from '@openzeppelin/relayer-sdk';
@@ -42,13 +43,52 @@ export class ChannelPool {
   async acquire(options: AcquireOptions): Promise<PoolLock> {
     const maxSpins = POOL.ACQUIRE_MAX_SPINS;
 
+    // --- Read state ONCE for the entire retry loop ---
+    let ids = await this.getRelayerIdsFromKV();
+    if (ids.length === 0) {
+      throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
+        code: 'NO_CHANNELS_CONFIGURED',
+        status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+      });
+    }
+
+    if (options.contractId && options.limitedContracts.has(options.contractId)) {
+      ids = filterChannelsForLimitedContract(ids, options.capacityRatio);
+    }
+
+    // Shuffle all candidates; batch size scales so every spin covers an
+    // equal slice of the pool, guaranteeing full coverage across all spins.
+    const candidates = ids.slice();
+    shuffle(candidates);
+
+    // Read LRU for a small prefix only (capped at 36) to guide initial ordering.
+    // The rest stay in random shuffled order — no extra Redis reads.
+    const lruSampleSize = Math.min(candidates.length, maxSpins * POOL.MAX_CLAIMS_PER_SPIN);
+    const lruMap = await this.readLruMap(candidates.slice(0, lruSampleSize));
+    const prefix = candidates.slice(0, lruSampleSize);
+    prefix.sort((a, b) => (lruMap[a] ?? 0) - (lruMap[b] ?? 0));
+    for (let j = 0; j < prefix.length; j++) candidates[j] = prefix[j];
+
+    // Batch size: cover the full pool across maxSpins iterations
+    const batchSize = Math.max(POOL.MAX_CLAIMS_PER_SPIN, Math.ceil(candidates.length / maxSpins));
+
+    let offset = 0;
     for (let i = 0; i < maxSpins; i++) {
-      const result = await this.tryAcquire(options);
+      if (offset >= candidates.length) {
+        // Full sweep done — reshuffle for next sweep
+        offset = 0;
+        shuffle(candidates);
+      }
+
+      const batch = candidates.slice(offset, offset + batchSize);
+      offset += batchSize;
+
+      const result = await this.tryClaimBatch(batch);
       if (result) return result;
 
-      const jitter =
-        POOL.ACQUIRE_RETRY_MIN_MS +
-        Math.floor(Math.random() * (POOL.ACQUIRE_RETRY_MAX_MS - POOL.ACQUIRE_RETRY_MIN_MS + 1));
+      // Exponential backoff with full jitter
+      const baseDelay = Math.min(POOL.ACQUIRE_MAX_DELAY_MS, POOL.ACQUIRE_BASE_DELAY_MS * Math.pow(2, i));
+      const jitter = Math.floor(Math.random() * baseDelay);
       await sleep(jitter);
     }
 
@@ -62,57 +102,12 @@ export class ChannelPool {
     });
   }
 
-  /** Read phase + claim phase (no global mutex) */
-  private async tryAcquire(options: AcquireOptions): Promise<PoolLock | null> {
-    // --- READ PHASE (no lock) ---
-    let ids = await this.getRelayerIdsFromKV();
-    if (ids.length === 0) {
-      throw pluginError('No channel accounts configured. Use the management API to set channel accounts.', {
-        code: 'NO_CHANNELS_CONFIGURED',
-        status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-      });
-    }
-
-    if (options.contractId && options.limitedContracts.has(options.contractId)) {
-      ids = filterChannelsForLimitedContract(ids, options.capacityRatio);
-    }
-
-    const lockPrefix = this.lockKeyPrefix();
-    let lruMap: Record<string, number> = {};
-    try {
-      lruMap = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
-    } catch (err) {
-      console.warn('[channels] LRU map read failed, using empty ordering map', err);
-    }
-
-    let lockedSet: Set<string>;
-    try {
-      const lockedKeys = await this.kv.listKeys(`${lockPrefix}*`);
-      lockedSet = new Set(lockedKeys.map((k) => k.slice(lockPrefix.length)));
-    } catch (err) {
-      // Fallback: if listKeys fails, degrade to O(N) per-channel exists checks.
-      // This is expensive with many channels — log so persistent failures are observable.
-      console.warn('[channels] listKeys failed, falling back to per-channel exists checks', err);
-      const results = await Promise.all(ids.map((id) => this.kv.exists(this.lockKey(id))));
-      lockedSet = new Set(ids.filter((_, i) => results[i]));
-    }
-
-    const unlocked = ids.filter((id) => !lockedSet.has(id));
-    if (unlocked.length === 0) return null;
-
-    // Sort by LRU ascending — oldest channel is always first (deterministic).
-    // Shuffle-then-stable-sort: tie-break among equal timestamps is random,
-    // spreading contention when multiple channels share the same LRU value.
-    shuffle(unlocked);
-    unlocked.sort((a, b) => (lruMap[a] ?? 0) - (lruMap[b] ?? 0));
-    const candidates = unlocked;
-
-    // --- CLAIM PHASE (per-channel lock) ---
-    for (const candidate of candidates) {
+  /** Try to claim one channel from a batch of candidates */
+  private async tryClaimBatch(batch: string[]): Promise<PoolLock | null> {
+    for (const candidate of batch) {
       const result = await this.tryClaimChannel(candidate);
       if (result) return result;
     }
-
     return null;
   }
 
@@ -131,7 +126,8 @@ export class ChannelPool {
           { ttlSec: this.channelLockTtlSec }
         );
 
-        await this.updateLruMap(relayerId);
+        // Fire-and-forget: LRU is best-effort, don't hold the claim lock for it
+        this.updateLru(relayerId);
 
         return { relayerId, token };
       },
@@ -187,31 +183,33 @@ export class ChannelPool {
     return `${this.network}:channel:relayer-ids`;
   }
 
-  private lockKeyPrefix(): string {
-    return `${this.network}:channel:in-use:`;
-  }
-
   private lockKey(relayerId: string): string {
-    return `${this.lockKeyPrefix()}${relayerId}`;
+    return `${this.network}:channel:in-use:${relayerId}`;
   }
 
   private claimKey(relayerId: string): string {
     return `${this.network}:channel:claim:${relayerId}`;
   }
 
-  private lruMapKey(): string {
-    return `${this.network}:channel:lru-map`;
+  private lruKey(relayerId: string): string {
+    return `${this.network}:channel:lru:${relayerId}`;
   }
 
-  private async updateLruMap(relayerId: string): Promise<void> {
-    try {
-      const lruMap = (await this.kv.get<Record<string, number>>(this.lruMapKey())) ?? {};
-      lruMap[relayerId] = Date.now();
-      await this.kv.set(this.lruMapKey(), lruMap, { ttlSec: POOL.LRU_MAP_TTL_SECONDS });
-    } catch (err) {
-      console.debug('[channels] failed to update LRU map', err);
-      // Best-effort: stale LRU map only affects ordering, not correctness
-    }
+  /** Read per-channel LRU timestamps in parallel (partial failures keep successful reads) */
+  private async readLruMap(ids: string[]): Promise<Record<string, number>> {
+    const lruMap: Record<string, number> = {};
+    const results = await Promise.allSettled(ids.map((id) => this.kv.get<{ ts: number }>(this.lruKey(id))));
+    results.forEach((r, i) => {
+      lruMap[ids[i]] = r.status === 'fulfilled' ? (r.value?.ts ?? 0) : 0;
+    });
+    return lruMap;
+  }
+
+  /** Fire-and-forget LRU timestamp update for a single channel */
+  private updateLru(relayerId: string): void {
+    this.kv.set(this.lruKey(relayerId), { ts: Date.now() }, { ttlSec: POOL.LRU_KEY_TTL_SECONDS }).catch((err) => {
+      console.debug('[channels] failed to update LRU key', err);
+    });
   }
 
   private async getRelayerIdsFromKV(): Promise<string[]> {
@@ -282,8 +280,9 @@ function simpleHash(str: string): number {
  */
 function filterChannelsForLimitedContract(ids: string[], ratio: number): string[] {
   const k = Math.max(1, Math.floor(ratio * ids.length));
+  const hashes = new Map(ids.map((id) => [id, simpleHash(id)]));
   return ids
     .slice()
-    .sort((a, b) => simpleHash(a) - simpleHash(b) || a.localeCompare(b))
+    .sort((a, b) => hashes.get(a)! - hashes.get(b)! || a.localeCompare(b))
     .slice(0, k);
 }
