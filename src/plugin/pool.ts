@@ -61,7 +61,7 @@ export class ChannelPool {
     const candidates = ids.slice();
     shuffle(candidates);
 
-    // Read LRU for a small prefix only (capped at 36) to guide initial ordering.
+    // Read LRU for a small prefix only (capped at maxSpins * POOL.MAX_CLAIMS_PER_SPIN) to guide initial ordering.
     // The rest stay in random shuffled order — no extra Redis reads.
     const lruSampleSize = Math.min(candidates.length, maxSpins * POOL.MAX_CLAIMS_PER_SPIN);
     const lruMap = await this.readLruMap(candidates.slice(0, lruSampleSize));
