@@ -93,38 +93,38 @@ describe('ChannelPool', () => {
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2', 'p3'] });
 
     const now = Date.now();
-    await kv.set('testnet:channel:lru-map', {
-      p1: now,
-      p2: now - 10000,
-      p3: now - 5000,
-    });
+    await kv.set('testnet:channel:lru:p1', { ts: now });
+    await kv.set('testnet:channel:lru:p2', { ts: now - 10000 });
+    await kv.set('testnet:channel:lru:p3', { ts: now - 5000 });
 
     const lock = await pool.acquire(defaultOptions);
     expect(lock.relayerId).toBe('p2');
   });
 
-  test('never-used channels are preferred (missing from LRU map defaults to 0)', async () => {
+  test('never-used channels are preferred (missing from LRU defaults to 0)', async () => {
     const kv = new FakeKV();
     const pool = new ChannelPool('testnet', kv as any, 30);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
 
-    await kv.set('testnet:channel:lru-map', { p1: Date.now() - 10000 });
+    await kv.set('testnet:channel:lru:p1', { ts: Date.now() - 10000 });
 
     const lock = await pool.acquire(defaultOptions);
-    // p2 has no LRU entry (defaults to 0), so it's older than p1 and should be in top-K
+    // p2 has no LRU entry (defaults to 0), so it's older than p1 and should be preferred
     expect(lock.relayerId).toBe('p2');
   });
 
-  test('acquire updates LRU map with acquisition timestamp', async () => {
+  test('acquire updates LRU key with acquisition timestamp', async () => {
     const kv = new FakeKV();
     const pool = new ChannelPool('testnet', kv as any, 30);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
 
     const before = Date.now();
     const lock = await pool.acquire(defaultOptions);
-    const lruMap = await kv.get<Record<string, number>>('testnet:channel:lru-map');
-    expect(lruMap).not.toBeNull();
-    expect(lruMap![lock.relayerId]).toBeGreaterThanOrEqual(before);
+    // LRU update is fire-and-forget — give it a tick to complete
+    await new Promise((r) => setTimeout(r, 10));
+    const lruEntry = await kv.get<{ ts: number }>(`testnet:channel:lru:${lock.relayerId}`);
+    expect(lruEntry).not.toBeNull();
+    expect(lruEntry!.ts).toBeGreaterThanOrEqual(before);
   });
 
   test('releaseWithCooldown keeps lock key alive with short TTL', async () => {
@@ -197,30 +197,43 @@ describe('ChannelPool', () => {
       expect(stored?.token).toBe(lock.token);
     }
 
-    // LRU map is best-effort — concurrent writes may lose entries (last-writer-wins).
-    // Just verify at least one entry was written.
-    const lruMap = await kv.get<Record<string, number>>('testnet:channel:lru-map');
-    expect(lruMap).not.toBeNull();
-    expect(Object.keys(lruMap ?? {}).length).toBeGreaterThanOrEqual(1);
+    // LRU updates are fire-and-forget — give them a tick
+    await new Promise((r) => setTimeout(r, 10));
+    // Verify at least one LRU entry was written
+    let lruCount = 0;
+    for (const id of ['p1', 'p2', 'p3']) {
+      const entry = await kv.get<{ ts: number }>(`testnet:channel:lru:${id}`);
+      if (entry?.ts) lruCount++;
+    }
+    expect(lruCount).toBeGreaterThanOrEqual(1);
   });
 
-  test('LRU read failure does not trigger per-channel fallback scan', async () => {
+  test('listKeys is never called during acquire', async () => {
     const kv = new FakeKV();
     const pool = new ChannelPool('testnet', kv as any, 30);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
 
-    const getSpy = vi.spyOn(kv, 'get');
-    getSpy.mockImplementation(async (key: string) => {
-      if (key === 'testnet:channel:lru-map') {
+    const listKeysSpy = vi.spyOn(kv, 'listKeys');
+    await pool.acquire(defaultOptions);
+
+    expect(listKeysSpy).not.toHaveBeenCalled();
+  });
+
+  test('LRU read failure does not block acquisition', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
+
+    // Make all LRU key reads fail
+    const origGet = kv.get.bind(kv);
+    vi.spyOn(kv, 'get').mockImplementation(async (key: string) => {
+      if (key.includes('channel:lru:')) {
         throw new Error('LRU unavailable');
       }
-      return FakeKV.prototype.get.call(kv, key);
+      return origGet(key);
     });
 
-    const existsSpy = vi.spyOn(kv, 'exists');
     const lock = await pool.acquire(defaultOptions);
-
-    expect(existsSpy).toHaveBeenCalledTimes(1);
     expect(['p1', 'p2']).toContain(lock.relayerId);
   });
 
@@ -271,7 +284,6 @@ describe('ChannelPool', () => {
     const pool = new ChannelPool('testnet', kv as any, 30);
     await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1', 'p2'] });
 
-    // Pre-lock the claim key for p1 and p2's in-use key is free
     // Simulate: p1's claim lock is held by another worker
     await kv.set('testnet:channel:claim:p1', { token: 'lock' }, { ttlSec: 3 });
 

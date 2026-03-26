@@ -42,7 +42,11 @@ describe('ChannelPool busy claim locks', () => {
     kv.exists = async (key: string) => {
       if (!injected && key === 'testnet:channel:in-use:p1') {
         injected = true;
-        await kv.set('testnet:channel:in-use:p1', { token: 'other-worker', lockedAt: new Date().toISOString() }, { ttlSec: 30 });
+        await kv.set(
+          'testnet:channel:in-use:p1',
+          { token: 'other-worker', lockedAt: new Date().toISOString() },
+          { ttlSec: 30 }
+        );
       }
       return origExists(key);
     };

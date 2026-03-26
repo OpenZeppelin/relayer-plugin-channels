@@ -13,13 +13,52 @@ import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from './submit';
-import { HTTP_STATUS } from './constants';
+import { HTTP_STATUS, RELAYER_INFO_CACHE_TTL_SECONDS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc, InclusionFees, getContractIdFromTransaction } from './fee';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 import { getSequence, commitSequence, clearSequence } from './sequence';
+
+/** Subset of relayer metadata used by the plugin (address + network_type). */
+type CachedRelayerInfo = { address: string; network_type: string };
+type CacheEntry = { info: CachedRelayerInfo; expiresAt: number };
+
+/**
+ * In-memory cache for relayer info. Avoids a remote API call (getRelayer → HTTP GET)
+ * on every request while a channel lock is held. Keyed by `${network}:${relayerId}`.
+ * Entries expire after RELAYER_INFO_CACHE_TTL_SECONDS; stale entries are evicted on miss.
+ */
+const relayerInfoCache = new Map<string, CacheEntry>();
+
+/** @internal Exported for test isolation only. */
+export function clearRelayerInfoCache(): void {
+  relayerInfoCache.clear();
+}
+
+/**
+ * Return cached relayer info or fetch from the API and cache the result.
+ * Returns null if the relayer has no address (misconfigured).
+ */
+export async function getCachedRelayerInfo(
+  network: string,
+  relayerId: string,
+  relayer: Relayer
+): Promise<CachedRelayerInfo | null> {
+  const cacheKey = `${network}:${relayerId}`;
+  const cached = relayerInfoCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.info;
+
+  // Evict stale entry so it doesn't linger in memory
+  if (cached) relayerInfoCache.delete(cacheKey);
+
+  const info = await relayer.getRelayer();
+  if (!info?.address) return null;
+  const entry: CachedRelayerInfo = { address: info.address, network_type: info.network_type };
+  relayerInfoCache.set(cacheKey, { info: entry, expiresAt: Date.now() + RELAYER_INFO_CACHE_TTL_SECONDS * 1000 });
+  return entry;
+}
 
 interface PipelineContext {
   api: PluginAPI;
@@ -142,7 +181,7 @@ async function handleFuncAuthSubmit(
   try {
     poolLock = await ctx.pool.acquire(ctx.acquireOptions);
     const channelRelayer = ctx.api.useRelayer(poolLock.relayerId);
-    const channelInfo = await channelRelayer.getRelayer();
+    const channelInfo = await getCachedRelayerInfo(ctx.network, poolLock.relayerId, channelRelayer);
     console.log(`[channels] Acquired channel: ${poolLock.relayerId}`);
     if (!channelInfo || !channelInfo.address) {
       throw pluginError('Channel relayer not found', {
@@ -316,7 +355,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     };
   }
 
-  const fundInfo = await fundRelayer.getRelayer();
+  const fundInfo = await getCachedRelayerInfo(config.network, fundRelayerId, fundRelayer as Relayer);
   if (!fundInfo || !fundInfo.address) {
     throw pluginError('Fund relayer not found', {
       code: 'RELAYER_UNAVAILABLE',

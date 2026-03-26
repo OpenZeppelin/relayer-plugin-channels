@@ -340,9 +340,7 @@ async function main() {
       // For xdr-payment, pre-fetch account so each parallel run gets a unique sequence (avoid duplicate hashes)
       const needsUniqueSeq = t.id === 'xdr-payment';
       // eslint-disable-next-line prettier/prettier
-      const baseSeq = needsUniqueSeq
-        ? (await rpcServer.getAccount(address)).sequenceNumber()
-        : undefined;
+      const baseSeq = needsUniqueSeq ? (await rpcServer.getAccount(address)).sequenceNumber() : undefined;
       const promises = Array.from({ length: concurrency }, (_, i) => {
         const runCtx: Ctx =
           needsUniqueSeq && baseSeq ? { ...ctx, sequenceOverride: (BigInt(baseSeq) + BigInt(i)).toString() } : ctx;

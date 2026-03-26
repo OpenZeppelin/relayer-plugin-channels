@@ -32,15 +32,20 @@ export const POOL = {
   // Per-channel claim lock TTL — must exceed worst-case callback latency
   // to prevent TTL expiry allowing a second worker into the same claim section
   CLAIM_LOCK_TTL_SECONDS: 3,
-  // Retry policy when all candidates busy
-  ACQUIRE_MAX_SPINS: 30,
-  ACQUIRE_RETRY_MIN_MS: 10,
-  ACQUIRE_RETRY_MAX_MS: 30,
+  // Retry policy: exponential backoff with full jitter
+  ACQUIRE_MAX_SPINS: 12,
+  ACQUIRE_BASE_DELAY_MS: 25,
+  ACQUIRE_MAX_DELAY_MS: 500,
+  // Max claim-lock attempts per spin (batch size)
+  MAX_CLAIMS_PER_SPIN: 3,
   // Hard-block cooldown for uncertain-outcome channels (~1 Stellar ledger with margin)
   CHANNEL_COOLDOWN_MS: 6_000,
-  // Housekeeping TTL for the single LRU map document
-  LRU_MAP_TTL_SECONDS: 86_400,
+  // Housekeeping TTL for per-channel LRU keys
+  LRU_KEY_TTL_SECONDS: 86_400,
 } as const;
+
+// Relayer info cache — address and network_type are effectively immutable
+export const RELAYER_INFO_CACHE_TTL_SECONDS = 1_800; // 30 minutes
 
 // Time Constants
 export const TIME = {
