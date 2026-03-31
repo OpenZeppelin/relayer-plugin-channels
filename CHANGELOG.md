@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.19.0
+
+### Minor Changes
+
+- 5f5ec06: fix: Improve channel acquire logic (#111)
+
 ## 0.18.0
 
 ### Minor Changes
