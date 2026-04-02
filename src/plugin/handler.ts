@@ -8,15 +8,21 @@
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 import type { PluginAPI, PluginKVStore, Relayer } from '@openzeppelin/relayer-sdk';
 import { PoolLock, ChannelPool, AcquireOptions } from './pool';
-import { loadConfig, getNetworkPassphrase, type ChannelAccountsConfig } from './config';
+import { loadConfig, getNetworkPassphrase, ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
 import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from './submit';
-import { HTTP_STATUS, RELAYER_INFO_CACHE_TTL_SECONDS } from './constants';
+import { HTTP_STATUS, POOL, RELAYER_INFO_CACHE_TTL_SECONDS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc, InclusionFees, getContractIdFromTransaction } from './fee';
+import {
+  parseFundRelayerOverrides,
+  resolveInclusionFees,
+  resolveTimeouts,
+  resolveTransactionParams,
+} from './fund-relayer-config';
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 import { getSequence, commitSequence, clearSequence } from './sequence';
@@ -81,6 +87,17 @@ function getApiKey(headers: Record<string, string[]>, headerName: string): strin
 }
 
 /**
+ * Compute how long a channel lock should be extended based on remaining tx validity.
+ * The tx maxTime was set to ~(txBuildTime + maxTimeBoundOffsetSeconds) at build time.
+ * We add one ledger cooldown as margin for the tx to finalize after expiry.
+ */
+function computeExtendTtlSec(txBuildTime: number, maxTimeBoundOffsetSeconds: number): number {
+  const txExpiryMs = txBuildTime + maxTimeBoundOffsetSeconds * 1000;
+  const remainingMs = txExpiryMs - Date.now() + POOL.CHANNEL_COOLDOWN_MS;
+  return Math.max(1, Math.ceil(remainingMs / 1000));
+}
+
+/**
  * Extracts func and auth from an unsigned Soroban transaction.
  * Returns null if the transaction is not a single invokeHostFunction operation.
  */
@@ -134,7 +151,7 @@ async function handleXdrSubmit(
     return handleFuncAuthSubmit(extracted.func, extracted.auth, { ...ctx, acquireOptions: updatedOptions }, skipWait);
   }
 
-  const validated = validateExistingTransactionForSubmitOnly(tx);
+  const validated = validateExistingTransactionForSubmitOnly(tx, ctx.config);
   const maxFee = calculateMaxFee(validated, ctx.acquireOptions.limitedContracts, ctx.fees);
   const contractId = getContractIdFromTransaction(validated);
   await ctx.tracker?.checkBudget(maxFee);
@@ -163,7 +180,14 @@ async function handleFuncAuthSubmit(
   skipWait?: boolean
 ): Promise<ChannelAccountsResponse> {
   // Simulate once — used for both read-only detection and transaction assembly
-  const simulation = await simulateTransaction(func, auth, ctx.fundAddress, ctx.fundRelayer, ctx.networkPassphrase);
+  const simulation = await simulateTransaction(
+    func,
+    auth,
+    ctx.fundAddress,
+    ctx.fundRelayer,
+    ctx.networkPassphrase,
+    ctx.config.maxTimeBoundOffsetSeconds
+  );
 
   if (simulation.isReadOnly) {
     console.log(`[channels] Read-only call detected, returning simulation result`);
@@ -207,13 +231,15 @@ async function handleFuncAuthSubmit(
     );
 
     // Assemble the transaction using the cached simulation result — no second RPC call
+    const txBuildTime = Date.now();
     const built = buildWithChannel(
       func,
       auth,
       { address: channelInfo.address, sequence },
       ctx.networkPassphrase,
       simulation.rawSimResult,
-      ctx.config.minSignatureExpirationLedgerBuffer
+      ctx.config.minSignatureExpirationLedgerBuffer,
+      ctx.config.maxTimeBoundOffsetSeconds
     );
     console.debug(
       `[channels] After assembly: built.fee=${built.fee}, minResourceFee=${simulation.rawSimResult.minResourceFee}`
@@ -250,8 +276,9 @@ async function handleFuncAuthSubmit(
         ctx.config
       );
       if (result.status === 'pending' || result.status === 'sent' || result.status === 'submitted') {
-        console.log(`[channels]: extending lock and clearing sequence`);
-        await ctx.pool.extendLock(poolLock!);
+        const extendSec = computeExtendTtlSec(txBuildTime, ctx.config.maxTimeBoundOffsetSeconds);
+        console.log(`[channels]: extending lock (${extendSec}s) and clearing sequence`);
+        await ctx.pool.extendLock(poolLock!, extendSec);
         await clearSequence(ctx.kv, ctx.network, channelInfo.address);
         poolLock = undefined; // skip release in finally
       } else if (result.status === 'confirmed') {
@@ -266,8 +293,9 @@ async function handleFuncAuthSubmit(
       await clearSequence(ctx.kv, ctx.network, channelInfo.address);
 
       if (error.code === 'WAIT_TIMEOUT' && poolLock) {
-        console.log(`[channels] Extending lock for WAIT_TIMEOUT error`);
-        await ctx.pool.extendLock(poolLock);
+        const extendSec = computeExtendTtlSec(txBuildTime, ctx.config.maxTimeBoundOffsetSeconds);
+        console.log(`[channels] Extending lock for WAIT_TIMEOUT (${extendSec}s)`);
+        await ctx.pool.extendLock(poolLock, extendSec);
         poolLock = undefined; // skip release in finally
       } else if (error.code === 'ONCHAIN_FAILED') {
         // Sequence was consumed (tx landed on chain) — cooldown prevents
@@ -289,7 +317,7 @@ async function handleFuncAuthSubmit(
 
 async function channelAccounts(context: PluginContext): Promise<ChannelAccountsResponse> {
   const startTime = Date.now();
-  const { api, kv, params, headers } = context;
+  const { api, kv, params, headers, config: pluginConfig } = context;
 
   // Management branch: handle and return immediately
   if (isManagementRequest(params)) {
@@ -377,12 +405,20 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     capacityRatio: config.contractCapacityRatio,
   };
 
-  const fees: InclusionFees = {
-    inclusionFeeDefault: config.inclusionFeeDefault,
-    inclusionFeeLimited: config.inclusionFeeLimited,
+  // 4. Resolve per-fund-relayer overrides from plugin config
+  const fundOverrides = parseFundRelayerOverrides(pluginConfig, fundRelayerId);
+  const fees = await resolveInclusionFees(fundOverrides, config, fundRelayer as Relayer, kv);
+  const timeouts = resolveTimeouts(fundOverrides, config);
+  const txParams = resolveTransactionParams(fundOverrides, config);
+  const effectiveConfig: ChannelAccountsConfig = {
+    ...config,
+    globalTimeoutMs: timeouts.globalTimeoutMs,
+    pollingTimeoutMs: timeouts.pollingTimeoutMs,
+    maxTimeBoundOffsetSeconds: txParams.maxTimeBoundOffsetSeconds,
+    minSignatureExpirationLedgerBuffer: txParams.minSignatureExpirationLedgerBuffer,
   };
 
-  // 4. Build pipeline context
+  // 5. Build pipeline context
   const ctx: PipelineContext = {
     api,
     kv,
@@ -394,11 +430,11 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     acquireOptions,
     fees,
     tracker,
-    config,
+    config: effectiveConfig,
     startTime,
   };
 
-  // 5. Branch by request type
+  // 6. Branch by request type
   if (request.type === 'xdr') {
     console.log(`[channels] Flow: XDR submit-only`);
     return await handleXdrSubmit(request.xdr, ctx, request.skipWait);

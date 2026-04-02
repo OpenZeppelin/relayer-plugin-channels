@@ -16,7 +16,12 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
 - [Development](#development)
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [x402 Fund Relayer](#x402-fund-relayer)
+- [Alternative Fund Relayers](#alternative-fund-relayers)
+- [Per-Fund-Relayer Configuration](#per-fund-relayer-configuration)
+  - [Dynamic Inclusion Fees](#dynamic-inclusion-fees)
+  - [Timeout Overrides](#timeout-overrides)
+  - [Transaction Parameter Overrides](#transaction-parameter-overrides)
+  - [Configuration Precedence](#configuration-precedence)
 - [Contract Capacity Limits](#contract-capacity-limits)
 - [Management API](#management-api)
   - [List Channel Accounts](#list-channel-accounts)
@@ -224,7 +229,7 @@ export PLUGIN_ADMIN_SECRET="your-secret-here"  # Required for management API
 # Optional environment variables
 # Comma-separated list of allowed alternative fund relayers (e.g., for x402 or similar flows)
 export ALLOWED_FUND_RELAYER_IDS="x402-channels-fund"
-export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 30
+export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 60
 
 # Fee tracking (optional)
 export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set)
@@ -244,6 +249,13 @@ export SEQUENCE_NUMBER_CACHE_MAX_AGE_MS=120000  # Max age of cached sequence num
 
 # Auth expiry validation (optional)
 export MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER=2  # Minimum ledger margin for auth entry signatureExpirationLedger (default: 2)
+
+# Transaction timebounds (optional)
+export MAX_TIME_BOUND_OFFSET_SECONDS=60  # Max future offset for tx maxTime in seconds (default: 60)
+
+# Request timeouts (optional)
+export PLUGIN_GLOBAL_TIMEOUT_MS=30000    # Overall request timeout in ms (default: 30000)
+export PLUGIN_POLLING_TIMEOUT_MS=25000   # Transaction polling timeout in ms (default: 25000)
 ```
 
 Your Relayer should now contain:
@@ -375,6 +387,93 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - When `fundRelayerId` is omitted, the primary `FUND_RELAYER_ID` is used
 - `fundRelayerId` must be a non-empty string
 - `getTransaction` requests can also include `fundRelayerId`; polling should use the same relayer selection as submission
+
+## Per-Fund-Relayer Configuration
+
+Individual fund relayers can have custom settings for fees, timeouts, and transaction parameters. This is configured via the plugin's `config` field in the relayer's `config.json`, not via environment variables.
+
+Environment variables define **global defaults**. Per-fund-relayer settings **override** them for requests that use that fund relayer. Requests using fund relayers without overrides (or the default fund relayer) use the global env-var defaults unchanged.
+
+### Setup
+
+Add a `config` block to the plugin definition in your relayer's `config.json`:
+
+```json
+{
+  "plugins": [
+    {
+      "id": "channels",
+      "path": "channels/index.ts",
+      "config": {
+        "fundRelayers": {
+          "x402-fund": {
+            "dynamicFee": {
+              "enabled": true,
+              "percentile": "p50",
+              "cacheTtlMs": 10000
+            },
+            "timeouts": {
+              "globalTimeoutMs": 45000,
+              "pollingTimeoutMs": 40000
+            },
+            "transactionParams": {
+              "maxTimeBoundOffsetSeconds": 120,
+              "minSignatureExpirationLedgerBuffer": 5
+            }
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+All sections (`dynamicFee`, `timeouts`, `transactionParams`) are optional. You can configure any combination.
+
+### Dynamic Inclusion Fees
+
+When enabled, the plugin fetches real-time fee data from Soroban RPC `getFeeStats` and uses a percentile of `sorobanInclusionFee` as the inclusion fee, instead of the static 201/203 stroops.
+
+| Field        | Type    | Default | Description                                                                                                 |
+| ------------ | ------- | ------- | ----------------------------------------------------------------------------------------------------------- |
+| `enabled`    | boolean | —       | Must be `true` to activate dynamic fees                                                                     |
+| `percentile` | string  | `"p50"` | Which percentile to use. Valid: `p10`, `p20`, `p30`, `p40`, `p50`, `p60`, `p70`, `p80`, `p90`, `p95`, `p99` |
+| `cacheTtlMs` | number  | `10000` | How long to cache the fee stats result (ms). Shared across all workers via KV store                         |
+
+When dynamic fees are active, the same fee is used for both limited and non-limited contracts (the limited/non-limited distinction is static tuning that dynamic fees replace).
+
+On any RPC or cache failure, the plugin falls back to the global static fees (`INCLUSION_FEE_DEFAULT` / `INCLUSION_FEE_LIMITED`), preserving the limited/non-limited split.
+
+### Timeout Overrides
+
+Override request timeouts for specific fund relayers. Useful when certain traffic sources (e.g., x402) need longer processing windows.
+
+| Field              | Type   | Default                                 | Description                                    |
+| ------------------ | ------ | --------------------------------------- | ---------------------------------------------- |
+| `globalTimeoutMs`  | number | env `PLUGIN_GLOBAL_TIMEOUT_MS` (30000)  | Overall request timeout in ms                  |
+| `pollingTimeoutMs` | number | env `PLUGIN_POLLING_TIMEOUT_MS` (25000) | Transaction confirmation polling timeout in ms |
+
+### Transaction Parameter Overrides
+
+Override transaction construction and validation parameters per fund relayer.
+
+| Field                                | Type   | Default                                          | Description                                                                             |
+| ------------------------------------ | ------ | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `maxTimeBoundOffsetSeconds`          | number | env `MAX_TIME_BOUND_OFFSET_SECONDS` (60)         | Max future offset for tx `maxTime`. Also controls validation of incoming XDR timebounds |
+| `minSignatureExpirationLedgerBuffer` | number | env `MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER` (2) | Minimum ledger margin required for auth entry `signatureExpirationLedger`               |
+
+### Configuration Precedence
+
+Settings are resolved per request in this order (first match wins):
+
+1. **Per-fund-relayer override** — from `config.fundRelayers[fundRelayerId]` in `config.json`
+2. **Global env var** — from the corresponding environment variable
+3. **Built-in default** — hardcoded constant in the plugin
+
+Example: a request with `fundRelayerId: "x402-fund"` where the plugin config has `timeouts.globalTimeoutMs: 45000` and the env var `PLUGIN_GLOBAL_TIMEOUT_MS=30000`:
+
+- The x402-fund request uses 45000ms
+- All other requests use 30000ms (env var default)
 
 ## Contract Capacity Limits
 

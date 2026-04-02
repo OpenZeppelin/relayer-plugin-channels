@@ -18,6 +18,10 @@ vi.mock('../src/plugin/config', () => ({
     inclusionFeeDefault: 203,
     inclusionFeeLimited: 201,
     sequenceNumberCacheMaxAgeMs: 120_000,
+    minSignatureExpirationLedgerBuffer: 2,
+    maxTimeBoundOffsetSeconds: 60,
+    globalTimeoutMs: 30_000,
+    pollingTimeoutMs: 25_000,
   }),
   getNetworkPassphrase: () => 'Test SDF Network ; September 2015',
 }));
@@ -213,7 +217,7 @@ describe('handler sequence cache lifecycle', () => {
     expect(result.status).toBe('pending');
     expect(commitSequenceSpy).not.toHaveBeenCalled();
     expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
-    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' }, expect.any(Number));
     expect(poolSpies.release).not.toHaveBeenCalled();
   });
 
@@ -259,7 +263,7 @@ describe('handler sequence cache lifecycle', () => {
     const ctx = makeContext(kv);
     await expect(handler(ctx)).rejects.toMatchObject({ code: 'WAIT_TIMEOUT' });
 
-    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' }, expect.any(Number));
     expect(poolSpies.release).not.toHaveBeenCalled();
   });
 
@@ -304,7 +308,7 @@ describe('handler sequence cache lifecycle', () => {
       const result = await handler(ctx);
 
       expect(result.status).toBe(status);
-      expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+      expect(poolSpies.extendLock).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' }, expect.any(Number));
       expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
       expect(commitSequenceSpy).not.toHaveBeenCalled();
       expect(poolSpies.release).not.toHaveBeenCalled();
@@ -313,4 +317,61 @@ describe('handler sequence cache lifecycle', () => {
       mockValidateResult.skipWait = false;
     }
   );
+
+  test('extend TTL is based on remaining tx validity from build time, not lockTtlSeconds', async () => {
+    // Config: maxTimeBoundOffsetSeconds=60, CHANNEL_COOLDOWN_MS=6000
+    // txBuildTime is captured right before buildWithChannel, so:
+    //   extend ≈ (txBuildTime + 60s - now + 6s) / 1000 ≈ 66s
+    // It should NOT be lockTtlSeconds (30)
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'pending',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    const extendTtl = poolSpies.extendLock.mock.calls[0][1] as number;
+    expect(extendTtl).toBeGreaterThan(60);
+    expect(extendTtl).toBeLessThanOrEqual(67);
+  });
+
+  test('extend TTL is stable regardless of pre-build processing time', async () => {
+    // Delay work before tx build. The extend TTL should still be anchored to
+    // build time, so a long pre-build delay should not materially reduce it.
+    getSequenceSpy.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return '42';
+    });
+
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'pending',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    const extendTtl = poolSpies.extendLock.mock.calls[0][1] as number;
+    // ~50ms elapsed pre-build should not materially reduce the extend TTL.
+    expect(extendTtl).toBeGreaterThan(64);
+    expect(extendTtl).toBeLessThanOrEqual(67);
+  });
+
+  test('extend TTL is always a positive integer', async () => {
+    mockSubmit.mockResolvedValue({
+      transactionId: 'tx-1',
+      status: 'pending',
+      hash: 'hash-1',
+    });
+
+    const ctx = makeContext(kv);
+    await handler(ctx);
+
+    const extendTtl = poolSpies.extendLock.mock.calls[0][1] as number;
+    expect(extendTtl).toBeGreaterThanOrEqual(1);
+    expect(Number.isInteger(extendTtl)).toBe(true);
+  });
 });

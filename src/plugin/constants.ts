@@ -21,7 +21,7 @@ export const HTTP_STATUS = {
 export const CONFIG = {
   DEFAULT_LOCK_TTL_SECONDS: 30,
   MIN_LOCK_TTL_SECONDS: 3,
-  MAX_LOCK_TTL_SECONDS: 30,
+  MAX_LOCK_TTL_SECONDS: 60,
   DEFAULT_CONTRACT_CAPACITY_RATIO: 0.8,
   DEFAULT_SEQUENCE_NUMBER_CACHE_MAX_AGE_MS: 120_000,
   DEFAULT_MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
@@ -47,17 +47,15 @@ export const POOL = {
 // Relayer info cache — address and network_type are effectively immutable
 export const RELAYER_INFO_CACHE_TTL_SECONDS = 1_800; // 30 minutes
 
-// Time Constants
+// Time constants — used for both simulation tx construction and incoming tx validation
 export const TIME = {
+  MIN_TIME_BOUND: 0,
   MAX_TIME_BOUND_OFFSET_SECONDS: 60,
 } as const;
 
 // Simulation-related defaults
 export const SIMULATION = {
   DEFAULT_FEE: '100',
-  MIN_TIME_BOUND: 0,
-  MAX_TIME_BOUND_OFFSET_SECONDS: 60,
-  MAX_FUTURE_TIME_BOUND_SECONDS: 60,
   SIMULATION_AUTH_MODE: 'enforce',
   /** Minimum ledger margin required between latestLedger and auth signatureExpirationLedger. Must be > 1 since simulation already validates 1 ledger of validity. ~10s at ~5s/ledger. */
   MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER: 2,
@@ -78,4 +76,15 @@ export const POLLING = {
 export const FEE = {
   // For non-Soroban txs: 100,000 stroops (0.01 XLM) per Stellar best practice
   NON_SOROBAN_FEE: 100_000,
+} as const;
+
+// Dynamic fee estimation defaults
+export const DYNAMIC_FEE = {
+  DEFAULT_PERCENTILE: 'p50' as const,
+  DEFAULT_CACHE_TTL_MS: 10_000,
+  VALID_PERCENTILES: ['p10', 'p20', 'p30', 'p40', 'p50', 'p60', 'p70', 'p80', 'p90', 'p95', 'p99'] as const,
+  // Margins above the fee-bump minimum (BASE_FEE * 2) to avoid landing exactly
+  // at the protocol floor. Used by both static defaults and dynamic fee computation.
+  FEE_BUMP_MARGIN_DEFAULT: 3,
+  FEE_BUMP_MARGIN_LIMITED: 1,
 } as const;

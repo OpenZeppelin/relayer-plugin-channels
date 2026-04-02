@@ -6,11 +6,11 @@
 
 import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING } from './constants';
+import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE } from './constants';
 
 // Default inclusion fees (matching launchtube)
-const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + 3; // 203
-const DEFAULT_INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + 1; // 201
+const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + DYNAMIC_FEE.FEE_BUMP_MARGIN_DEFAULT; // 203
+const DEFAULT_INCLUSION_FEE_LIMITED = Number(BASE_FEE) * 2 + DYNAMIC_FEE.FEE_BUMP_MARGIN_LIMITED; // 201
 
 export interface ChannelAccountsConfig {
   fundRelayerId: string;
@@ -28,6 +28,7 @@ export interface ChannelAccountsConfig {
   inclusionFeeLimited: number;
   sequenceNumberCacheMaxAgeMs: number;
   minSignatureExpirationLedgerBuffer: number;
+  maxTimeBoundOffsetSeconds: number;
   globalTimeoutMs: number;
   pollingTimeoutMs: number;
 }
@@ -152,6 +153,13 @@ function parsePollingTimeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : POLLING.DEFAULT_TIMEOUT_MS;
 }
 
+function parseMaxTimeBoundOffsetSeconds(): number {
+  const raw = process.env.MAX_TIME_BOUND_OFFSET_SECONDS;
+  if (!raw) return TIME.MAX_TIME_BOUND_OFFSET_SECONDS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : TIME.MAX_TIME_BOUND_OFFSET_SECONDS;
+}
+
 function parseContractCapacityRatio(): number {
   const raw = process.env.CONTRACT_CAPACITY_RATIO;
   if (!raw) return CONFIG.DEFAULT_CONTRACT_CAPACITY_RATIO;
@@ -191,6 +199,7 @@ export function loadConfig(): ChannelAccountsConfig {
     inclusionFeeLimited: parseInclusionFee('INCLUSION_FEE_LIMITED', DEFAULT_INCLUSION_FEE_LIMITED),
     sequenceNumberCacheMaxAgeMs: parseSequenceNumberCacheMaxAge(),
     minSignatureExpirationLedgerBuffer: parseMinAuthExpiryLedgerBuffer(),
+    maxTimeBoundOffsetSeconds: parseMaxTimeBoundOffsetSeconds(),
     globalTimeoutMs: parseGlobalTimeoutMs(),
     pollingTimeoutMs: parsePollingTimeoutMs(),
   };

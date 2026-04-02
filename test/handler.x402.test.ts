@@ -19,6 +19,9 @@ const baseConfig = {
   inclusionFeeLimited: 201,
   sequenceNumberCacheMaxAgeMs: 120_000,
   minSignatureExpirationLedgerBuffer: 20,
+  maxTimeBoundOffsetSeconds: 60,
+  globalTimeoutMs: 30_000,
+  pollingTimeoutMs: 25_000,
 };
 vi.mock('../src/plugin/config', () => ({
   loadConfig: () => ({ ...baseConfig, ...configOverride }),
@@ -43,11 +46,16 @@ vi.mock('../src/plugin/validation', () => ({
 }));
 
 // Mock pool
+const poolSpies = {
+  acquire: vi.fn().mockResolvedValue({ relayerId: 'channel-1', token: 'tok' }),
+  release: vi.fn().mockResolvedValue(undefined),
+  extendLock: vi.fn().mockResolvedValue(undefined),
+};
 vi.mock('../src/plugin/pool', () => {
   class MockChannelPool {
-    acquire = vi.fn();
-    release = vi.fn();
-    extendLock = vi.fn();
+    acquire = poolSpies.acquire;
+    release = poolSpies.release;
+    extendLock = poolSpies.extendLock;
   }
   return { ChannelPool: MockChannelPool };
 });
@@ -78,6 +86,12 @@ vi.mock('../src/plugin/fee', () => ({
   getContractIdFromTransaction: vi.fn(),
 }));
 
+// Mock fee-stats
+const mockFetchDynamicInclusionFee = vi.fn().mockResolvedValue(500);
+vi.mock('../src/plugin/fee-stats', () => ({
+  fetchDynamicInclusionFee: (...args: any[]) => mockFetchDynamicInclusionFee(...args),
+}));
+
 // Mock simulation
 vi.mock('../src/plugin/simulation', () => ({
   simulateTransaction: vi.fn(),
@@ -102,11 +116,34 @@ vi.mock('../src/plugin/fee-tracking', () => ({
 vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   class MockTransaction {
-    signatures = [{ hint: () => Buffer.from('hint') }];
-    operations = [{ type: 'invokeHostFunction' }];
+    signatures: any[];
+    operations: any[];
     fee = '100';
+    constructor(xdr: string) {
+      this.signatures = xdr === 'UNSIGNED_XDR' ? [] : [{ hint: () => Buffer.from('hint') }];
+      this.operations = [{ type: 'invokeHostFunction' }];
+    }
     toXDR() {
       return 'MOCK_XDR';
+    }
+    toEnvelope() {
+      return {
+        v1: () => ({
+          tx: () => ({
+            operations: () => [
+              {
+                body: () => ({
+                  switch: () => actual.xdr.OperationType.invokeHostFunction(),
+                  invokeHostFunctionOp: () => ({
+                    hostFunction: () => ({ switch: () => ({ value: 0 }) }),
+                    auth: () => [],
+                  }),
+                }),
+              },
+            ],
+          }),
+        }),
+      };
     }
   }
   return {
@@ -115,13 +152,17 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
   };
 });
 
-import { handler } from '../src/plugin/handler';
+import { handler, clearRelayerInfoCache } from '../src/plugin/handler';
+import { submitWithFeeBumpAndWait, signWithChannelAndFund } from '../src/plugin/submit';
+import { validateExistingTransactionForSubmitOnly } from '../src/plugin/tx';
+import { simulateTransaction, buildWithChannel } from '../src/plugin/simulation';
+import { calculateMaxFee } from '../src/plugin/fee';
 
 describe('alternative fund relayer selection', () => {
   let kv: FakeKV;
   let useRelayerMock: ReturnType<typeof vi.fn>;
 
-  function makeContext(): PluginContext {
+  function makeContext(pluginConfig?: Record<string, any>): PluginContext {
     const fundRelayer = {
       getRelayer: vi.fn().mockResolvedValue({
         address: 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
@@ -131,6 +172,10 @@ describe('alternative fund relayer selection', () => {
         id: 'tx-123',
         status: 'confirmed',
         hash: 'hash-123',
+      }),
+      rpc: vi.fn().mockResolvedValue({
+        id: '1',
+        result: { sorobanInclusionFee: { p50: '500' } },
       }),
     };
 
@@ -145,6 +190,7 @@ describe('alternative fund relayer selection', () => {
       kv: kv as any,
       params: { xdr: 'SIGNED_XDR' },
       headers: {},
+      config: pluginConfig,
     } as unknown as PluginContext;
   }
 
@@ -157,7 +203,20 @@ describe('alternative fund relayer selection', () => {
       skipWait: false,
       fundRelayerId: undefined,
     };
+    mockFetchDynamicInclusionFee.mockResolvedValue(500);
+    clearRelayerInfoCache();
     vi.clearAllMocks();
+    (simulateTransaction as any).mockResolvedValue({
+      isReadOnly: false,
+      rawSimResult: { id: '1', results: [{ auth: ['a'], xdr: 'AAAA' }] },
+    });
+    (buildWithChannel as any).mockReturnValue({
+      fee: '100',
+      toXDR: () => 'BUILT_XDR',
+      signatures: [{ hint: () => Buffer.alloc(4) }],
+      operations: [{ type: 'invokeHostFunction' }],
+    });
+    (signWithChannelAndFund as any).mockImplementation(async (tx: any) => tx);
   });
 
   test('uses default fund relayer when no fundRelayerId specified', async () => {
@@ -222,5 +281,185 @@ describe('alternative fund relayer selection', () => {
     await handler(ctx);
 
     expect(useRelayerMock).toHaveBeenCalledWith('x402-fund-1');
+  });
+
+  test('uses dynamic fees when fund relayer has dynamicFee enabled in plugin config', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
+
+    const pluginConfig = {
+      fundRelayers: {
+        'x402-fund-1': {
+          dynamicFee: { enabled: true, percentile: 'p50', cacheTtlMs: 10000 },
+        },
+      },
+    };
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    expect(mockFetchDynamicInclusionFee).toHaveBeenCalledWith(
+      expect.anything(), // relayer
+      expect.anything(), // kv
+      'testnet', // network
+      'p50',
+      10000
+    );
+  });
+
+  test('uses static fees when fund relayer is not in plugin config', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
+
+    const pluginConfig = {
+      fundRelayers: {
+        'other-fund': { dynamicFee: { enabled: true } },
+      },
+    };
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    expect(mockFetchDynamicInclusionFee).not.toHaveBeenCalled();
+  });
+
+  test('uses static fees when no plugin config provided', async () => {
+    const ctx = makeContext(); // no pluginConfig
+    await handler(ctx);
+
+    expect(mockFetchDynamicInclusionFee).not.toHaveBeenCalled();
+  });
+
+  test('applies timeout overrides from plugin config', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
+
+    const pluginConfig = {
+      fundRelayers: {
+        'x402-fund-1': {
+          timeouts: { globalTimeoutMs: 20000, pollingTimeoutMs: 15000 },
+        },
+      },
+    };
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    // Check that submitWithFeeBumpAndWait was called with overridden config
+    const submitMock = submitWithFeeBumpAndWait as any;
+    expect(submitMock).toHaveBeenCalled();
+    const configArg = submitMock.mock.calls[0]?.[9]; // 10th arg is config
+    expect(configArg?.globalTimeoutMs).toBe(20000);
+    expect(configArg?.pollingTimeoutMs).toBe(15000);
+  });
+
+  test('applies transactionParams overrides from plugin config', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
+
+    const pluginConfig = {
+      fundRelayers: {
+        'x402-fund-1': {
+          transactionParams: { maxTimeBoundOffsetSeconds: 120 },
+        },
+      },
+    };
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    const txValidateMock = validateExistingTransactionForSubmitOnly as any;
+    expect(txValidateMock).toHaveBeenCalled();
+    const configArg = txValidateMock.mock.calls[0]?.[1];
+    expect(configArg?.maxTimeBoundOffsetSeconds).toBe(120);
+  });
+
+  test('uses default maxTimeBoundOffsetSeconds when no plugin config', async () => {
+    const ctx = makeContext(); // no pluginConfig
+    await handler(ctx);
+
+    const txValidateMock = validateExistingTransactionForSubmitOnly as any;
+    expect(txValidateMock).toHaveBeenCalled();
+    const configArg = txValidateMock.mock.calls[0]?.[1];
+    expect(configArg?.maxTimeBoundOffsetSeconds).toBe(60);
+  });
+
+  test('falls back to static fee split in handler when dynamic fee fetch fails', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = { ...mockValidateResult, fundRelayerId: 'x402-fund-1' };
+    mockFetchDynamicInclusionFee.mockResolvedValueOnce(null);
+
+    const pluginConfig = {
+      fundRelayers: {
+        'x402-fund-1': {
+          dynamicFee: { enabled: true, percentile: 'p50', cacheTtlMs: 10000 },
+        },
+      },
+    };
+
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    const calculateMaxFeeMock = calculateMaxFee as any;
+    expect(calculateMaxFeeMock).toHaveBeenCalled();
+    const feesArg = calculateMaxFeeMock.mock.calls[0]?.[2];
+    expect(feesArg).toEqual({ inclusionFeeDefault: 203, inclusionFeeLimited: 201 });
+  });
+
+  test('applies unsigned XDR transaction param overrides in simulation and build paths', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = {
+      type: 'xdr' as const,
+      xdr: 'UNSIGNED_XDR',
+      skipWait: false,
+      fundRelayerId: 'x402-fund-1',
+    };
+
+    const pluginConfig = {
+      fundRelayers: {
+        'x402-fund-1': {
+          transactionParams: {
+            maxTimeBoundOffsetSeconds: 120,
+            minSignatureExpirationLedgerBuffer: 5,
+          },
+        },
+      },
+    };
+
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    const simulateMock = simulateTransaction as any;
+    const buildMock = buildWithChannel as any;
+    expect(simulateMock).toHaveBeenCalled();
+    expect(buildMock).toHaveBeenCalled();
+    expect(simulateMock.mock.calls[0]?.[5]).toBe(120);
+    expect(buildMock.mock.calls[0]?.[5]).toBe(5);
+    expect(buildMock.mock.calls[0]?.[6]).toBe(120);
+  });
+
+  test('preserves global transaction defaults for missing unsigned XDR override fields', async () => {
+    configOverride = { allowedFundRelayerIds: new Set(['x402-fund-1']) };
+    mockValidateResult = {
+      type: 'xdr' as const,
+      xdr: 'UNSIGNED_XDR',
+      skipWait: false,
+      fundRelayerId: 'x402-fund-1',
+    };
+
+    const pluginConfig = {
+      fundRelayers: {
+        'x402-fund-1': {
+          transactionParams: {
+            minSignatureExpirationLedgerBuffer: 5,
+          },
+        },
+      },
+    };
+
+    const ctx = makeContext(pluginConfig);
+    await handler(ctx);
+
+    const simulateMock = simulateTransaction as any;
+    const buildMock = buildWithChannel as any;
+    expect(simulateMock.mock.calls[0]?.[5]).toBe(60);
+    expect(buildMock.mock.calls[0]?.[5]).toBe(5);
+    expect(buildMock.mock.calls[0]?.[6]).toBe(60);
   });
 });

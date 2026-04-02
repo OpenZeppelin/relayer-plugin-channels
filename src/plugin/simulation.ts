@@ -9,7 +9,7 @@
 
 import { Account, Operation, rpc, Transaction, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
 import { JsonRpcResponseNetworkRpcResult, pluginError, Relayer } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, SIMULATION } from './constants';
+import { HTTP_STATUS, SIMULATION, TIME } from './constants';
 
 export interface ChannelAccount {
   address: string;
@@ -49,14 +49,15 @@ export async function simulateTransaction(
   auth: xdr.SorobanAuthorizationEntry[] | undefined,
   sourceAddress: string,
   relayer: Relayer,
-  networkPassphrase: string
+  networkPassphrase: string,
+  maxTimeBoundOffsetSeconds: number = TIME.MAX_TIME_BOUND_OFFSET_SECONDS
 ): Promise<SimulationResult> {
   const now = Math.floor(Date.now() / 1000);
 
   const transaction = new TransactionBuilder(new Account(sourceAddress, '0'), {
     fee: SIMULATION.DEFAULT_FEE,
     networkPassphrase,
-    timebounds: { minTime: SIMULATION.MIN_TIME_BOUND, maxTime: now + SIMULATION.MAX_TIME_BOUND_OFFSET_SECONDS },
+    timebounds: { minTime: TIME.MIN_TIME_BOUND, maxTime: now + maxTimeBoundOffsetSeconds },
   })
     .addOperation(Operation.invokeHostFunction({ func, auth }))
     .build();
@@ -143,7 +144,8 @@ export function buildWithChannel(
   channel: ChannelAccount,
   networkPassphrase: string,
   simResult: rpc.Api.RawSimulateTransactionResponse,
-  minSignatureExpirationLedgerBuffer: number = SIMULATION.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER
+  minSignatureExpirationLedgerBuffer: number = SIMULATION.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER,
+  maxTimeBoundOffsetSeconds: number = TIME.MAX_TIME_BOUND_OFFSET_SECONDS
 ): Transaction {
   if (!simResult.transactionData) {
     throw pluginError('Simulation response missing transactionData', {
@@ -214,7 +216,7 @@ export function buildWithChannel(
   const transaction = new TransactionBuilder(new Account(channel.address, channel.sequence), {
     fee: SIMULATION.DEFAULT_FEE,
     networkPassphrase,
-    timebounds: { minTime: SIMULATION.MIN_TIME_BOUND, maxTime: now + SIMULATION.MAX_TIME_BOUND_OFFSET_SECONDS },
+    timebounds: { minTime: TIME.MIN_TIME_BOUND, maxTime: now + maxTimeBoundOffsetSeconds },
     sorobanData,
   })
     .addOperation(

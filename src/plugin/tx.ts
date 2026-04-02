@@ -6,9 +6,14 @@
 
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, SIMULATION } from './constants';
+import type { ChannelAccountsConfig } from './config';
+import { HTTP_STATUS } from './constants';
 
-export function validateExistingTransactionForSubmitOnly(tx: Transaction): Transaction {
+export function validateExistingTransactionForSubmitOnly(
+  tx: Transaction,
+  config: Pick<ChannelAccountsConfig, 'maxTimeBoundOffsetSeconds'>
+): Transaction {
+  const { maxTimeBoundOffsetSeconds } = config;
   const now = Math.floor(Date.now() / 1000);
 
   // Reject fee-bump envelopes
@@ -46,9 +51,9 @@ export function validateExistingTransactionForSubmitOnly(tx: Transaction): Trans
       });
     }
 
-    if (maxTime - now > SIMULATION.MAX_FUTURE_TIME_BOUND_SECONDS) {
+    if (maxTime - now > maxTimeBoundOffsetSeconds) {
       throw pluginError(
-        `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${SIMULATION.MAX_FUTURE_TIME_BOUND_SECONDS} seconds`,
+        `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${maxTimeBoundOffsetSeconds} seconds`,
         {
           code: 'TIMEBOUNDS_TOO_FAR',
           status: HTTP_STATUS.BAD_REQUEST,
