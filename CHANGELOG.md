@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.20.0
+
+### Minor Changes
+
+- 59e9af2: feat: Add support to define config at fund relayer level (#115)
+
 ## 0.19.0
 
 ### Minor Changes
