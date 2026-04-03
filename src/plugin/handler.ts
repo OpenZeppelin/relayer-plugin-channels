@@ -383,7 +383,12 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     };
   }
 
-  const fundInfo = await getCachedRelayerInfo(config.network, fundRelayerId, fundRelayer as Relayer);
+  // 3. Resolve per-fund-relayer overrides and fetch fund relayer info in parallel
+  const fundOverrides = parseFundRelayerOverrides(pluginConfig, fundRelayerId);
+  const [fundInfo, fees] = await Promise.all([
+    getCachedRelayerInfo(config.network, fundRelayerId, fundRelayer as Relayer),
+    resolveInclusionFees(fundOverrides, config, fundRelayer as Relayer, kv),
+  ]);
   if (!fundInfo || !fundInfo.address) {
     throw pluginError('Fund relayer not found', {
       code: 'RELAYER_UNAVAILABLE',
@@ -399,15 +404,11 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     });
   }
 
-  // 3. Build acquire options for contract capacity limits
+  // 4. Build acquire options and resolve remaining overrides
   const acquireOptions: AcquireOptions = {
     limitedContracts: config.limitedContracts,
     capacityRatio: config.contractCapacityRatio,
   };
-
-  // 4. Resolve per-fund-relayer overrides from plugin config
-  const fundOverrides = parseFundRelayerOverrides(pluginConfig, fundRelayerId);
-  const fees = await resolveInclusionFees(fundOverrides, config, fundRelayer as Relayer, kv);
   const timeouts = resolveTimeouts(fundOverrides, config);
   const txParams = resolveTransactionParams(fundOverrides, config);
   const effectiveConfig: ChannelAccountsConfig = {
