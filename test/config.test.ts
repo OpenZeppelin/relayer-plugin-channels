@@ -43,6 +43,12 @@ describe('config', () => {
     expect(loadConfig().lockTtlSeconds).toBe(30);
     process.env.LOCK_TTL_SECONDS = '10';
     expect(loadConfig().lockTtlSeconds).toBe(10);
+    process.env.LOCK_TTL_SECONDS = '30';
+    expect(loadConfig().lockTtlSeconds).toBe(30);
+    process.env.LOCK_TTL_SECONDS = '60';
+    expect(loadConfig().lockTtlSeconds).toBe(60);
+    process.env.LOCK_TTL_SECONDS = '61';
+    expect(loadConfig().lockTtlSeconds).toBe(30);
     process.env.LOCK_TTL_SECONDS = '29';
     expect(loadConfig().lockTtlSeconds).toBe(29);
   });
@@ -170,6 +176,25 @@ describe('config', () => {
 
     process.env.MIN_SIGNATURE_EXPIRATION_LEDGER_BUFFER = 'invalid';
     expect(loadConfig().minSignatureExpirationLedgerBuffer).toBe(2);
+  });
+
+  test('max time bound offset uses defaults and parses valid custom values', () => {
+    delete process.env.MAX_TIME_BOUND_OFFSET_SECONDS;
+    expect(loadConfig().maxTimeBoundOffsetSeconds).toBe(60);
+
+    process.env.MAX_TIME_BOUND_OFFSET_SECONDS = '120.9';
+    expect(loadConfig().maxTimeBoundOffsetSeconds).toBe(120);
+  });
+
+  test('max time bound offset falls back to default for invalid values', () => {
+    process.env.MAX_TIME_BOUND_OFFSET_SECONDS = '0';
+    expect(loadConfig().maxTimeBoundOffsetSeconds).toBe(60);
+
+    process.env.MAX_TIME_BOUND_OFFSET_SECONDS = '-1';
+    expect(loadConfig().maxTimeBoundOffsetSeconds).toBe(60);
+
+    process.env.MAX_TIME_BOUND_OFFSET_SECONDS = 'invalid';
+    expect(loadConfig().maxTimeBoundOffsetSeconds).toBe(60);
   });
 
   test('timeout config uses defaults and parses valid custom values', () => {
