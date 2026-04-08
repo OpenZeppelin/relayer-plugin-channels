@@ -64,14 +64,14 @@ jobs:
           echo "path=${temp_dir}" >>"${GITHUB_OUTPUT}"
 
       - name: Download tarball
-        uses: slsa-framework/slsa-github-generator/.github/actions/secure-download-artifact@3bcecb4ade4f265cff30488059a9dca39e26b360 # main
+        uses: slsa-framework/slsa-github-generator/.github/actions/secure-download-artifact@a09dd8c05eda63cace134cb7dccd7e019f25e6f3 # main
         with:
           name: ${{ needs.provenance.outputs.package-download-name }}
           path: "${{ steps.temp-dir.outputs.path }}/${{ needs.provenance.outputs.package-name }}"
           sha256: ${{ needs.provenance.outputs.package-download-sha256 }}
 
       - name: Download provenance
-        uses: slsa-framework/slsa-github-generator/actions/nodejs/secure-attestations-download@3bcecb4ade4f265cff30488059a9dca39e26b360 # v1.6.0
+        uses: slsa-framework/slsa-github-generator/actions/nodejs/secure-attestations-download@a09dd8c05eda63cace134cb7dccd7e019f25e6f3 # v1.6.0
         with:
           name: ${{ needs.provenance.outputs.provenance-download-name }}
           path: "${{ steps.temp-dir.outputs.path }}"
