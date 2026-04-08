@@ -87,7 +87,7 @@ jobs:
 
       - name: Publish to NPM
         id: changesets
-        uses: changesets/action@3de3850952bec538fde60aac71731376e57b9b57 # v1.4.8
+        uses: changesets/action@e0145edc7d9d8679003495b11f87bd8ef63c0cba # v1.5.3
         with:
           setupGitUser: false
           version: pnpm ci:version
