@@ -28,10 +28,10 @@ export function rebuildWithChannel(params: RebuildParams): Transaction {
   // Parse input transaction
   let inputTx: Transaction;
   try {
-    const envelope = xdr.TransactionEnvelope.fromXDR(inputXdr, 'base64');
+    const envelope = xdr.TransactionEnvelope.fromXdr(inputXdr, 'base64');
 
     // Ensure it's a regular transaction envelope (not fee bump)
-    if (envelope.switch() !== xdr.EnvelopeType.envelopeTypeTx()) {
+    if (envelope.type !== 'envelopeTypeTx') {
       throw pluginError('Input must be a regular transaction envelope (not fee bump)', {
         code: 'INVALID_ENVELOPE_TYPE',
         status: HTTP_STATUS.BAD_REQUEST,
@@ -90,35 +90,41 @@ export function rebuildWithChannel(params: RebuildParams): Transaction {
     }
   }
 
-  // Manipulate the transaction envelope XDR directly to change source and sequence
-  // This is the most reliable approach that preserves all transaction details
+  // Rebuild the transaction envelope with the channel account as source and the
+  // channel's sequence number. XDR values are immutable in stellar-sdk v17, so a
+  // fresh envelope is constructed rather than mutating the decoded one.
 
   const envelope = inputTx.toEnvelope();
-  const txBody = envelope.v1().tx();
-
-  // Update source account to channel address
-  const channelAccountId = StrKey.decodeEd25519PublicKey(channelAddress);
-  const channelMuxed = xdr.MuxedAccount.keyTypeEd25519(channelAccountId);
-  txBody.sourceAccount(channelMuxed);
-
-  // Update sequence number
-  // Sequence numbers in Stellar are represented as Int64 in XDR
-  const seqNum = xdr.Int64.fromString(channelSequence);
-  txBody.seqNum(seqNum);
-
-  // Update operation sources to fund address if not set
-  const fundAccountId = StrKey.decodeEd25519PublicKey(fundAddress);
-  const fundMuxed = xdr.MuxedAccount.keyTypeEd25519(fundAccountId);
-
-  const operations = txBody.operations();
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    // If operation doesn't have a source, set it to fund address
-    if (!op.sourceAccount()) {
-      op.sourceAccount(fundMuxed);
-    }
+  if (envelope.type !== 'envelopeTypeTx') {
+    throw pluginError('Input must be a regular transaction envelope (not fee bump)', {
+      code: 'INVALID_ENVELOPE_TYPE',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
   }
+  const txBody = envelope.v1.tx;
 
-  // Create new transaction from modified envelope
-  return new Transaction(envelope, networkPassphrase);
+  const channelMuxed = xdr.MuxedAccount.keyTypeEd25519(StrKey.decodeEd25519PublicKey(channelAddress));
+  const fundMuxed = xdr.MuxedAccount.keyTypeEd25519(StrKey.decodeEd25519PublicKey(fundAddress));
+
+  // Operations without an explicit source get the fund address
+  const operations = txBody.operations.map((op) =>
+    op.sourceAccount == null ? new xdr.Operation({ sourceAccount: fundMuxed, body: op.body }) : op
+  );
+
+  const rebuilt = xdr.TransactionEnvelope.envelopeTypeTx(
+    new xdr.TransactionV1Envelope({
+      tx: new xdr.Transaction({
+        sourceAccount: channelMuxed,
+        fee: txBody.fee,
+        seqNum: BigInt(channelSequence),
+        cond: txBody.cond,
+        memo: txBody.memo,
+        operations,
+        ext: txBody.ext,
+      }),
+      signatures: [...envelope.v1.signatures],
+    })
+  );
+
+  return new Transaction(rebuilt, networkPassphrase);
 }

@@ -21,11 +21,14 @@ export interface InclusionFees {
  */
 export function getContractIdFromFunc(func: xdr.HostFunction): string | undefined {
   try {
-    if (func.switch() !== xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
+    if (func.type !== 'hostFunctionTypeInvokeContract') {
       return undefined;
     }
-    const invokeContract = func.invokeContract();
-    return StrKey.encodeContract(invokeContract.contractAddress().contractId() as unknown as Buffer);
+    const contractAddress = func.invokeContract.contractAddress;
+    if (contractAddress.type !== 'scAddressTypeContract') {
+      return undefined;
+    }
+    return StrKey.encodeContract(contractAddress.contractId.toBytes());
   } catch {
     return undefined;
   }
@@ -59,10 +62,10 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
   const envelope = transaction.toEnvelope();
 
   let resourceFee = 0n;
-  if (envelope.switch() === xdr.EnvelopeType.envelopeTypeTx()) {
-    const sorobanData = envelope.v1().tx().ext().sorobanData();
-    if (sorobanData) {
-      resourceFee = sorobanData.resourceFee().toBigInt();
+  if (envelope.type === 'envelopeTypeTx') {
+    const ext = envelope.v1.tx.ext;
+    if (ext.type === 'sorobanData') {
+      resourceFee = ext.sorobanData.resourceFee;
     }
   }
 

@@ -126,11 +126,11 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
     let func: xdr.HostFunction;
     let auth: xdr.SorobanAuthorizationEntry[] = [];
     try {
-      func = xdr.HostFunction.fromXDR(params.func, 'base64');
+      func = xdr.HostFunction.fromXdr(params.func, 'base64');
       if (!Array.isArray(params.auth)) {
         throw new Error('auth must be an array of base64 strings');
       }
-      auth = params.auth.map((a: string) => xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64'));
+      auth = params.auth.map((a: string) => xdr.SorobanAuthorizationEntry.fromXdr(a, 'base64'));
     } catch (e: any) {
       throw pluginError('Invalid `func` or `auth` encoding', {
         code: 'INVALID_PARAMS',
@@ -141,8 +141,7 @@ export function validateAndParseRequest(params: any): ChannelAccountsRequest {
 
     // Reject SourceAccount credentials: incompatible with relayer-managed channel source
     for (const entry of auth) {
-      const credType = entry.credentials().switch();
-      if (credType === xdr.SorobanCredentialsType.sorobanCredentialsSourceAccount()) {
+      if (entry.credentials.type === 'sorobanCredentialsSourceAccount') {
         throw pluginError(
           'Detached address credentials required: source-account credentials are incompatible with relayer-managed channel accounts',
           {

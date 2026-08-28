@@ -4,7 +4,7 @@
  * Transaction validation helpers for the XDR submit-only path.
  */
 
-import { Transaction, xdr } from '@stellar/stellar-sdk';
+import { Transaction } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
 import type { ChannelAccountsConfig } from './config';
 import { HTTP_STATUS } from './constants';
@@ -18,8 +18,7 @@ export function validateExistingTransactionForSubmitOnly(
 
   // Reject fee-bump envelopes
   const envelope = tx.toEnvelope();
-  const kind = envelope.switch();
-  if (kind !== xdr.EnvelopeType.envelopeTypeTx()) {
+  if (envelope.type !== 'envelopeTypeTx') {
     throw pluginError('Input must be a regular transaction envelope (fee-bump not allowed)', {
       code: 'INVALID_ENVELOPE_TYPE',
       status: HTTP_STATUS.BAD_REQUEST,
@@ -27,9 +26,9 @@ export function validateExistingTransactionForSubmitOnly(
   }
 
   // Soroban sanity checks
-  const sorobanData = envelope.v1().tx().ext().sorobanData();
-  if (sorobanData) {
-    const resourceFee = sorobanData.resourceFee().toBigInt();
+  const ext = envelope.v1.tx.ext;
+  if (ext.type === 'sorobanData') {
+    const resourceFee = ext.sorobanData.resourceFee;
     if (BigInt(tx.fee) > resourceFee + 201n) {
       throw pluginError('Transaction fee must be equal to the resource fee', {
         code: 'FEE_MISMATCH',

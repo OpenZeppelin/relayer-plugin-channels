@@ -5,32 +5,32 @@ import { simulateTransaction, buildWithChannel, SimulationResult } from '../src/
 // Build a minimal SorobanTransactionData with empty readWrite footprint (read-only)
 function buildReadOnlyTransactionData(): string {
   const sorobanData = new SorobanDataBuilder().build();
-  return sorobanData.toXDR('base64');
+  return sorobanData.toXdr('base64');
 }
 
 // Build a SorobanTransactionData with a readWrite footprint entry (write)
 function buildWriteTransactionData(): string {
   const entry = xdr.LedgerKey.contractData(
     new xdr.LedgerKeyContractData({
-      contract: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+      contract: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
       key: xdr.ScVal.scvBool(true),
-      durability: xdr.ContractDataDurability.persistent(),
+      durability: xdr.ContractDataDurability.persistent,
     })
   );
   const sorobanData = new SorobanDataBuilder().setFootprint([entry], [entry]).build();
-  return sorobanData.toXDR('base64');
+  return sorobanData.toXdr('base64');
 }
 
 function buildWriteTransactionDataWithResourceFee(resourceFee: bigint): string {
   const entry = xdr.LedgerKey.contractData(
     new xdr.LedgerKeyContractData({
-      contract: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+      contract: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
       key: xdr.ScVal.scvBool(true),
-      durability: xdr.ContractDataDurability.persistent(),
+      durability: xdr.ContractDataDurability.persistent,
     })
   );
   const sorobanData = new SorobanDataBuilder().setFootprint([entry], [entry]).setResourceFee(resourceFee).build();
-  return sorobanData.toXDR('base64');
+  return sorobanData.toXdr('base64');
 }
 
 function makeRelayerMock(result: object, error?: any) {
@@ -56,9 +56,9 @@ describe('simulateTransaction', () => {
     // Build a host function for a contract call
     const op = contract.call('balance', xdr.ScVal.scvBool(true));
     // Extract the HostFunction from the operation XDR
-    const opXdr = op.toXDR();
-    const parsedOp = xdr.Operation.fromXDR(opXdr);
-    func = parsedOp.body().invokeHostFunctionOp().hostFunction();
+    const body = op.body;
+    if (body.type !== 'invokeHostFunction') throw new Error('expected invokeHostFunction');
+    func = body.invokeHostFunctionOp.hostFunction;
   });
 
   test('returns isReadOnly=true when no auth and no readWrite footprint', async () => {
@@ -226,23 +226,21 @@ describe('simulateTransaction', () => {
   });
 
   test('passes auth parameter through to the simulation', async () => {
-    const authEntry = xdr.SorobanAuthorizationEntry.fromXDR(
-      xdr.SorobanAuthorizationEntry.toXDR(
-        new xdr.SorobanAuthorizationEntry({
-          credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
-          rootInvocation: new xdr.SorobanAuthorizedInvocation({
-            function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-              new xdr.InvokeContractArgs({
-                contractAddress: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
-                functionName: 'test',
-                args: [],
-              })
-            ),
-            subInvocations: [],
-          }),
-        })
-      )
-    );
+    const authEntry = new xdr.SorobanAuthorizationEntry({
+      credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({
+            contractAddress: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
+            functionName: 'test',
+            args: [],
+          })
+        ),
+        subInvocations: [],
+      }),
+    });
+    // round-trip through XDR to mirror what the handler receives
+    const authEntryParsed = xdr.SorobanAuthorizationEntry.fromXdr(authEntry.toXdr());
 
     const relayer = makeRelayerMock({
       results: [{ xdr: 'AAAAAQ==', auth: [] }],
@@ -252,7 +250,7 @@ describe('simulateTransaction', () => {
     });
 
     // Should not throw when passing auth entries
-    const result = await simulateTransaction(func, [authEntry], SOURCE_ADDRESS, relayer, passphrase);
+    const result = await simulateTransaction(func, [authEntryParsed], SOURCE_ADDRESS, relayer, passphrase);
     expect(result).toBeDefined();
 
     // Verify the relayer.rpc was called (transaction was built and sent)
@@ -293,25 +291,30 @@ describe('buildWithChannel', () => {
   beforeEach(() => {
     const contract = new Contract(CONTRACT_ID);
     const op = contract.call('balance', xdr.ScVal.scvBool(true));
-    const opXdr = op.toXDR();
-    const parsedOp = xdr.Operation.fromXDR(opXdr);
-    func = parsedOp.body().invokeHostFunctionOp().hostFunction();
+    const body = op.body;
+    if (body.type !== 'invokeHostFunction') throw new Error('expected invokeHostFunction');
+    func = body.invokeHostFunctionOp.hostFunction;
   });
 
-  function buildAuthEntryXdr(expiryLedger: number): xdr.SorobanAuthorizationEntry {
+  function buildAuthEntryXdr(
+    expiryLedger: number,
+    variant: 'sorobanCredentialsAddress' | 'sorobanCredentialsAddressV2' = 'sorobanCredentialsAddress'
+  ): xdr.SorobanAuthorizationEntry {
+    const addressCredentials = new xdr.SorobanAddressCredentials({
+      address: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
+      nonce: 0n,
+      signatureExpirationLedger: expiryLedger,
+      signature: xdr.ScVal.scvVoid(),
+    });
     return new xdr.SorobanAuthorizationEntry({
-      credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
-        new xdr.SorobanAddressCredentials({
-          address: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
-          nonce: xdr.Int64.fromString('0'),
-          signatureExpirationLedger: expiryLedger,
-          signature: xdr.ScVal.scvVoid(),
-        })
-      ),
+      credentials:
+        variant === 'sorobanCredentialsAddressV2'
+          ? xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials)
+          : xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials),
       rootInvocation: new xdr.SorobanAuthorizedInvocation({
         function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
           new xdr.InvokeContractArgs({
-            contractAddress: xdr.ScAddress.scAddressTypeContract([...new Uint8Array(32)] as unknown as xdr.Hash),
+            contractAddress: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
             functionName: 'test',
             args: [],
           })
@@ -321,12 +324,48 @@ describe('buildWithChannel', () => {
     });
   }
 
+  test('rejects CAP-71 addressV2 auth entries with expiry below minSignatureExpirationLedgerBuffer', async () => {
+    const latestLedger = 10000;
+    const authEntry = buildAuthEntryXdr(latestLedger + 1, 'sorobanCredentialsAddressV2');
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger,
+      minResourceFee: '100',
+    };
+    const channel = { address: SOURCE_ADDRESS, sequence: '1' };
+
+    expect(() => buildWithChannel(func, undefined, channel, passphrase, rpcResult as any)).toThrow(
+      expect.objectContaining({ code: 'AUTH_EXPIRY_TOO_SHORT' })
+    );
+  });
+
+  test('accepts CAP-71 addressV2 auth entries returned by simulation when expiry margin is sufficient', async () => {
+    const latestLedger = 10000;
+    const authEntry = buildAuthEntryXdr(latestLedger + 100, 'sorobanCredentialsAddressV2');
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger,
+      minResourceFee: '100',
+    };
+    const channel = { address: SOURCE_ADDRESS, sequence: '1' };
+
+    const tx = buildWithChannel(func, undefined, channel, passphrase, rpcResult as any);
+    const envelope = tx.toEnvelope();
+    if (envelope.type !== 'envelopeTypeTx') throw new Error('expected envelopeTypeTx');
+    const body = envelope.v1.tx.operations[0].body;
+    if (body.type !== 'invokeHostFunction') throw new Error('expected invokeHostFunction');
+    expect(body.invokeHostFunctionOp.auth).toHaveLength(1);
+    expect(body.invokeHostFunctionOp.auth[0].credentials.type).toBe('sorobanCredentialsAddressV2');
+  });
+
   test('rejects when auth signatureExpirationLedger is below minSignatureExpirationLedgerBuffer', async () => {
     const latestLedger = 10000;
     // expiry = 10001 → margin = 1, default buffer = 2 → should reject
     const authEntry = buildAuthEntryXdr(latestLedger + 1);
     const rpcResult = {
-      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXDR('base64')] }],
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
       transactionData: buildWriteTransactionData(),
       latestLedger,
       minResourceFee: '100',
@@ -355,7 +394,7 @@ describe('buildWithChannel', () => {
     // expiry = 10004 → margin = 4, custom buffer = 5 → should reject
     const authEntry = buildAuthEntryXdr(latestLedger + 4);
     const rpcResult = {
-      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXDR('base64')] }],
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
       transactionData: buildWriteTransactionData(),
       latestLedger,
       minResourceFee: '100',
@@ -385,7 +424,7 @@ describe('buildWithChannel', () => {
     // expiry = 10005 → margin = 5, custom buffer = 5 → should pass
     const authEntry = buildAuthEntryXdr(latestLedger + 5);
     const rpcResult = {
-      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXDR('base64')] }],
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
       transactionData: buildWriteTransactionData(),
       latestLedger,
       minResourceFee: '100',

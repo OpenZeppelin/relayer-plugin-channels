@@ -17,10 +17,10 @@ describe('validation', () => {
   test('accepts func+auth with valid base64', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
-    const body = op.body();
-    const inv = body.invokeHostFunctionOp();
-    const func = inv.hostFunction().toXDR('base64');
-    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    const body = op.body;
+    const inv = body.invokeHostFunctionOp;
+    const func = inv.hostFunction.toXdr('base64');
+    const auth = (inv.auth ?? []).map((a: any) => a.toXdr('base64'));
     const out = validateAndParseRequest({ func, auth });
     expect(out.type).toBe('func-auth');
   });
@@ -33,10 +33,10 @@ describe('validation', () => {
   test('parses skipWait as boolean in func+auth', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
-    const body = op.body();
-    const inv = body.invokeHostFunctionOp();
-    const func = inv.hostFunction().toXDR('base64');
-    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    const body = op.body;
+    const inv = body.invokeHostFunctionOp;
+    const func = inv.hostFunction.toXdr('base64');
+    const auth = (inv.auth ?? []).map((a: any) => a.toXdr('base64'));
     const out = validateAndParseRequest({ func, auth, skipWait: true });
     expect(out.type).toBe('func-auth');
     expect((out as any).skipWait).toBe(true);
@@ -54,13 +54,65 @@ describe('validation', () => {
     expect(() => validateAndParseRequest({ xdr: 'BASE64XDR', skipWait: 1 })).toThrow('`skipWait` must be a boolean');
   });
 
+  function buildAuthEntry(credentials: xdr.SorobanCredentials): string {
+    const contractAddress = xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32)));
+    return new xdr.SorobanAuthorizationEntry({
+      credentials,
+      rootInvocation: new xdr.SorobanAuthorizedInvocation({
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new xdr.InvokeContractArgs({ contractAddress, functionName: 'test', args: [] })
+        ),
+        subInvocations: [],
+      }),
+    }).toXdr('base64');
+  }
+
+  function addressCredentials(): xdr.SorobanAddressCredentials {
+    return new xdr.SorobanAddressCredentials({
+      address: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
+      nonce: 0n,
+      signatureExpirationLedger: 100,
+      signature: xdr.ScVal.scvVoid(),
+    });
+  }
+
+  function hostFunctionXdr(): string {
+    const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
+    const body = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)).body;
+    if (body.type !== 'invokeHostFunction') throw new Error('expected invokeHostFunction');
+    return body.invokeHostFunctionOp.hostFunction.toXdr('base64');
+  }
+
+  test('accepts legacy address auth entries', () => {
+    const auth = [buildAuthEntry(xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials()))];
+    const out = validateAndParseRequest({ func: hostFunctionXdr(), auth });
+    expect(out.type).toBe('func-auth');
+    if (out.type !== 'func-auth') return;
+    expect(out.auth[0].credentials.type).toBe('sorobanCredentialsAddress');
+  });
+
+  test('accepts CAP-71 addressV2 auth entries (Protocol 27+ default, mandatory in Protocol 28)', () => {
+    const auth = [buildAuthEntry(xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials()))];
+    const out = validateAndParseRequest({ func: hostFunctionXdr(), auth });
+    expect(out.type).toBe('func-auth');
+    if (out.type !== 'func-auth') return;
+    expect(out.auth[0].credentials.type).toBe('sorobanCredentialsAddressV2');
+  });
+
+  test('rejects source-account auth entries', () => {
+    const auth = [buildAuthEntry(xdr.SorobanCredentials.sorobanCredentialsSourceAccount())];
+    expect(() => validateAndParseRequest({ func: hostFunctionXdr(), auth })).toThrow(
+      expect.objectContaining({ code: 'INVALID_PARAMS' })
+    );
+  });
+
   test('rejects non-boolean skipWait in func+auth request', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
-    const body = op.body();
-    const inv = body.invokeHostFunctionOp();
-    const func = inv.hostFunction().toXDR('base64');
-    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    const body = op.body;
+    const inv = body.invokeHostFunctionOp;
+    const func = inv.hostFunction.toXdr('base64');
+    const auth = (inv.auth ?? []).map((a: any) => a.toXdr('base64'));
     expect(() => validateAndParseRequest({ func, auth, skipWait: 'true' })).toThrow('`skipWait` must be a boolean');
   });
 
@@ -146,10 +198,10 @@ describe('validation', () => {
   test('accepts fundRelayerId as string in func+auth request', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
-    const body = op.body();
-    const inv = body.invokeHostFunctionOp();
-    const func = inv.hostFunction().toXDR('base64');
-    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    const body = op.body;
+    const inv = body.invokeHostFunctionOp;
+    const func = inv.hostFunction.toXdr('base64');
+    const auth = (inv.auth ?? []).map((a: any) => a.toXdr('base64'));
     const out = validateAndParseRequest({ func, auth, fundRelayerId: 'x402-fund' });
     expect(out.type).toBe('func-auth');
     expect((out as any).fundRelayerId).toBe('x402-fund');
@@ -158,10 +210,10 @@ describe('validation', () => {
   test('rejects non-string fundRelayerId in func+auth request', () => {
     const contract = new Contract('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
     const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(1)) as any;
-    const body = op.body();
-    const inv = body.invokeHostFunctionOp();
-    const func = inv.hostFunction().toXDR('base64');
-    const auth = (inv.auth() ?? []).map((a: any) => a.toXDR('base64'));
+    const body = op.body;
+    const inv = body.invokeHostFunctionOp;
+    const func = inv.hostFunction.toXdr('base64');
+    const auth = (inv.auth ?? []).map((a: any) => a.toXdr('base64'));
     expect(() => validateAndParseRequest({ func, auth, fundRelayerId: 123 })).toThrow(
       '`fundRelayerId` must be a non-empty string'
     );

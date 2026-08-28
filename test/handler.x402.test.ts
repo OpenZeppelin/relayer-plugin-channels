@@ -128,21 +128,22 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
     }
     toEnvelope() {
       return {
-        v1: () => ({
-          tx: () => ({
-            operations: () => [
+        type: 'envelopeTypeTx',
+        v1: {
+          tx: {
+            operations: [
               {
-                body: () => ({
-                  switch: () => actual.xdr.OperationType.invokeHostFunction(),
-                  invokeHostFunctionOp: () => ({
-                    hostFunction: () => ({ switch: () => ({ value: 0 }) }),
-                    auth: () => [],
-                  }),
-                }),
+                body: {
+                  type: 'invokeHostFunction',
+                  invokeHostFunctionOp: {
+                    hostFunction: { type: 'hostFunctionTypeInvokeContract' },
+                    auth: [],
+                  },
+                },
               },
             ],
-          }),
-        }),
+          },
+        },
       };
     }
   }
