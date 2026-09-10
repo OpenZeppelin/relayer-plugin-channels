@@ -11,12 +11,9 @@ describe('getAccountSequence', () => {
   });
 
   test('returns sequence number on valid ledger response', async () => {
-    vi.spyOn(xdr.LedgerEntryData, 'fromXDR').mockReturnValue({
-      account: () => ({
-        seqNum: () => ({
-          toString: () => '123',
-        }),
-      }),
+    vi.spyOn(xdr.LedgerEntryData, 'fromXdr').mockReturnValue({
+      type: 'account',
+      account: { seqNum: BigInt('123') },
     } as unknown as xdr.LedgerEntryData);
 
     const relayer = {
@@ -87,7 +84,7 @@ describe('getAccountSequence', () => {
   });
 
   test('throws FAILED_TO_GET_SEQUENCE when xdr decode fails', async () => {
-    vi.spyOn(xdr.LedgerEntryData, 'fromXDR').mockImplementation(() => {
+    vi.spyOn(xdr.LedgerEntryData, 'fromXdr').mockImplementation(() => {
       throw new Error('invalid xdr');
     });
 

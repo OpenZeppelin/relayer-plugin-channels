@@ -146,11 +146,13 @@ async function buildSignedSelfPayment(
 function buildNoAuthFuncPayload(contractId: string) {
   const contract = new Contract(contractId);
   const op = contract.call('no_auth_bump', xdr.ScVal.scvU32(42));
-  const body = (op as any).body();
-  const invokeOp = body.invokeHostFunctionOp();
-  const func = invokeOp.hostFunction();
-  const auth = invokeOp.auth() ?? [];
-  return { func: func.toXDR('base64'), auth: auth.map((a: any) => a.toXDR('base64')) };
+  const body = op.body;
+  if (body.type !== 'invokeHostFunction') throw new Error('expected invokeHostFunction operation');
+  const invokeOp = body.invokeHostFunctionOp;
+  return {
+    func: invokeOp.hostFunction.toXdr('base64'),
+    auth: invokeOp.auth.map((a) => a.toXdr('base64')),
+  };
 }
 
 async function buildUnsignedSorobanXdrWithAuth(
@@ -178,7 +180,13 @@ async function buildUnsignedSorobanXdrWithAuth(
   });
 
   // Sign the auth entry (simulates passkey signature)
-  const signedAuthEntry = await authorizeInvocation(keypair, validUntil, rootInv, address, passphrase);
+  const signedAuthEntry = await authorizeInvocation({
+    signer: keypair,
+    validUntilLedgerSeq: validUntil,
+    invocation: rootInv,
+    publicKey: address,
+    networkPassphrase: passphrase,
+  });
 
   // Build the operation with signed auth
   const op = Operation.invokeHostFunction({
@@ -197,7 +205,7 @@ async function buildUnsignedSorobanXdrWithAuth(
     .build();
 
   // Return XDR WITHOUT signing the envelope - this is the key difference
-  return tx.toXDR();
+  return tx.toXdr();
 }
 
 async function main() {
@@ -263,7 +271,7 @@ async function main() {
       label: 'XDR submit-only: signed self-payment',
       run: async ({ client, rpc, passphrase, address, keypair, debug, sequenceOverride }) => {
         const tx = await buildSignedSelfPayment(rpc, passphrase, address, keypair, sequenceOverride);
-        const res = await client.submitTransaction({ xdr: tx.toXDR() });
+        const res = await client.submitTransaction({ xdr: tx.toXdr() });
         printResult('xdr-payment', { success: true, data: res }, debug);
       },
     },
@@ -301,10 +309,16 @@ async function main() {
           function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(invokeArgs),
           subInvocations: [],
         });
-        const signedEntry = await authorizeInvocation(keypair, validUntil, rootInv, address, passphrase);
+        const signedEntry = await authorizeInvocation({
+          signer: keypair,
+          validUntilLedgerSeq: validUntil,
+          invocation: rootInv,
+          publicKey: address,
+          networkPassphrase: passphrase,
+        });
         const res = await client.submitSorobanTransaction({
-          func: func.toXDR('base64'),
-          auth: [signedEntry.toXDR('base64')],
+          func: func.toXdr('base64'),
+          auth: [signedEntry.toXdr('base64')],
         });
         printResult('func-auth-address-auth', { success: true, data: res }, debug);
       },

@@ -65,7 +65,7 @@ export async function getAccountSequence(relayer: Relayer, address: string): Pro
       id: Math.floor(Math.random() * 1e8).toString(),
       method: 'getLedgerEntries',
       params: {
-        keys: [accountKey.toXDR('base64')],
+        keys: [accountKey.toXdr('base64')],
       },
     });
   } catch (error) {
@@ -139,8 +139,11 @@ export async function getAccountSequence(relayer: Relayer, address: string): Pro
   }
 
   try {
-    const accountEntry = xdr.LedgerEntryData.fromXDR(firstEntryXdr, 'base64');
-    return accountEntry.account().seqNum().toString();
+    const accountEntry = xdr.LedgerEntryData.fromXdr(firstEntryXdr, 'base64');
+    if (accountEntry.type !== 'account') {
+      throw new Error(`Unexpected ledger entry type: ${accountEntry.type}`);
+    }
+    return accountEntry.account.seqNum.toString();
   } catch (error) {
     console.error('[channels] Sequence fetch failed', {
       event: 'sequence_xdr_decode_failed',

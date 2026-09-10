@@ -947,7 +947,7 @@ async function main(): Promise<void> {
           .setTimeout(options.timeoutSeconds)
           .build();
 
-        const transactionXdr = transaction.toXDR();
+        const transactionXdr = transaction.toXdr();
         currentSequence = account.sequenceNumber();
 
         const request: StellarTransactionRequest = {

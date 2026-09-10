@@ -110,16 +110,19 @@ export function extractFuncAuthFromUnsignedXdr(
   }
 
   const envelope = tx.toEnvelope();
-  const rawOp = envelope.v1().tx().operations()[0].body();
+  if (envelope.type !== 'envelopeTypeTx') {
+    return null;
+  }
+  const rawOp = envelope.v1.tx.operations[0].body;
 
-  if (rawOp.switch() !== xdr.OperationType.invokeHostFunction()) {
+  if (rawOp.type !== 'invokeHostFunction') {
     return null;
   }
 
-  const invokeHostFn = rawOp.invokeHostFunctionOp();
+  const invokeHostFn = rawOp.invokeHostFunctionOp;
   return {
-    func: invokeHostFn.hostFunction(),
-    auth: invokeHostFn.auth(),
+    func: invokeHostFn.hostFunction,
+    auth: [...invokeHostFn.auth],
   };
 }
 
@@ -161,7 +164,7 @@ async function handleXdrSubmit(
   };
   return submitWithFeeBumpAndWait(
     ctx.fundRelayer,
-    validated.toXDR(),
+    validated.toXdr(),
     ctx.network,
     maxFee,
     ctx.api,
@@ -265,7 +268,7 @@ async function handleFuncAuthSubmit(
     try {
       const result = await submitWithFeeBumpAndWait(
         ctx.fundRelayer,
-        signedTx.toXDR(),
+        signedTx.toXdr(),
         ctx.network,
         maxFee,
         ctx.api,

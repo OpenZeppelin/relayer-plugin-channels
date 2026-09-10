@@ -11,10 +11,9 @@ const ADDRESS = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 const KV_KEY = `${NETWORK}:channel:seq:${ADDRESS}`;
 
 function mockRelayerWithSequence(seq: string): Relayer {
-  vi.spyOn(xdr.LedgerEntryData, 'fromXDR').mockReturnValue({
-    account: () => ({
-      seqNum: () => ({ toString: () => seq }),
-    }),
+  vi.spyOn(xdr.LedgerEntryData, 'fromXdr').mockReturnValue({
+    type: 'account',
+    account: { seqNum: BigInt(seq) },
   } as unknown as xdr.LedgerEntryData);
 
   return {
