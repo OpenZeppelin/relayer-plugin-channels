@@ -9,6 +9,13 @@ import { pluginError } from '@openzeppelin/relayer-sdk';
 import type { ChannelAccountsConfig } from './config';
 import { HTTP_STATUS } from './constants';
 
+/**
+ * Validate a client-built transaction for the XDR submit-only path.
+ *
+ * Rejects fee-bump envelopes, Soroban transactions whose fee exceeds the
+ * declared resource fee plus the base inclusion fee, and a `timeBounds.maxTime`
+ * that is already in the past or further out than the configured maximum offset.
+ */
 export function validateExistingTransactionForSubmitOnly(
   tx: Transaction,
   config: Pick<ChannelAccountsConfig, 'maxTimeBoundOffsetSeconds'>

@@ -29,6 +29,13 @@ function parseFundRelayerId(params: any): string | undefined {
   return undefined;
 }
 
+/**
+ * Validate and normalize an incoming plugin request into one of the two
+ * supported shapes: a signed transaction `xdr` (submit-only) or a `func` +
+ * `auth` pair (channel flow). Base64 XDR fields are decoded here; malformed
+ * encodings and source-account auth credentials are rejected with
+ * `INVALID_PARAMS`.
+ */
 export function validateAndParseRequest(params: any): ChannelAccountsRequest {
   if (!params || typeof params !== 'object') {
     throw pluginError('Invalid request: params must be an object', {

@@ -58,6 +58,11 @@ function getInclusionFee(contractId: string | undefined, limitedContracts: Set<s
   return fees.inclusionFeeDefault;
 }
 
+/**
+ * Compute the maximum fee (in stroops) for a transaction: the Soroban resource
+ * fee declared in the envelope's sorobanData (0 for classic transactions) plus
+ * the inclusion fee, which is higher when the invoked contract is rate-limited.
+ */
 export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<string>, fees: InclusionFees): number {
   const envelope = transaction.toEnvelope();
 

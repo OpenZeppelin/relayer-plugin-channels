@@ -91,7 +91,7 @@ describe('validation', () => {
     expect(out.auth[0].credentials.type).toBe('sorobanCredentialsAddress');
   });
 
-  test('accepts CAP-71 addressV2 auth entries (Protocol 27+ default, mandatory in Protocol 28)', () => {
+  test('accepts CAP-71 addressV2 auth entries (Protocol 27+, replaces v1 at Protocol 28)', () => {
     const auth = [buildAuthEntry(xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials()))];
     const out = validateAndParseRequest({ func: hostFunctionXdr(), auth });
     expect(out.type).toBe('func-auth');

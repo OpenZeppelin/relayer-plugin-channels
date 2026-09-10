@@ -164,7 +164,7 @@ async function handleXdrSubmit(
   };
   return submitWithFeeBumpAndWait(
     ctx.fundRelayer,
-    validated.toXDR(),
+    validated.toXdr(),
     ctx.network,
     maxFee,
     ctx.api,
@@ -268,7 +268,7 @@ async function handleFuncAuthSubmit(
     try {
       const result = await submitWithFeeBumpAndWait(
         ctx.fundRelayer,
-        signedTx.toXDR(),
+        signedTx.toXdr(),
         ctx.network,
         maxFee,
         ctx.api,

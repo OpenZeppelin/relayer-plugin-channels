@@ -41,7 +41,7 @@ export async function signWithChannelAndFund(
   _fundAddress: string,
   networkPassphrase: string
 ): Promise<Transaction> {
-  const txXdr = transaction.toXDR();
+  const txXdr = transaction.toXdr();
   console.debug(`[channels] Signing transaction with channel (${channelAddress})`);
 
   // Get signatures from both accounts sequentially

@@ -69,7 +69,7 @@ export async function simulateTransaction(
       id: Math.floor(Math.random() * 1e8).toString(),
       method: 'simulateTransaction',
       // Enforce mode validates auth entry signatures during simulation.
-      params: { transaction: transaction.toXDR(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
+      params: { transaction: transaction.toXdr(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   } catch (err: any) {
     throw pluginError('Simulation network request failed', {
@@ -251,7 +251,8 @@ export function buildWithChannel(
  *
  * Uses the SDK's inspectAuthEntry so every credential variant is covered:
  * legacy `sorobanCredentialsAddress`, CAP-71 `sorobanCredentialsAddressV2`
- * (default from Protocol 27, mandatory in Protocol 28) and the delegates form.
+ * (introduced in Protocol 27, the stellar-sdk v17 default, and slated to
+ * replace v1 at the Protocol 28 upgrade) and the delegates form.
  */
 export function getAddressCredentialExpiry(entry: xdr.SorobanAuthorizationEntry): number | undefined {
   return inspectAuthEntry(entry).signatureExpirationLedger ?? undefined;
