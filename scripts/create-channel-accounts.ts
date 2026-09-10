@@ -136,7 +136,7 @@ const NETWORK_CONFIG: Record<string, { passphrase: string; horizon: string }> = 
 
 const DEFAULT_PREFIX = 'channel-';
 const DEFAULT_PADDING = 4;
-const DEFAULT_STARTING_BALANCE = '5';
+const DEFAULT_STARTING_BALANCE = '2';
 const DEFAULT_TIMEOUT_SECONDS = 180;
 const DEFAULT_NETWORK = 'testnet';
 
@@ -665,7 +665,7 @@ async function ensureRelayer(
   signerId: string
 ): Promise<{ id: string; address?: string }> {
   try {
-    const response = await relayersApi.createRelayer({
+    const relayerRequest: any = {
       id: relayerId,
       name: relayerName,
       network,
@@ -675,7 +675,9 @@ async function ensureRelayer(
       policies: {
         fee_payment_strategy: 'relayer',
       },
-    });
+    };
+
+    const response = await relayersApi.createRelayer(relayerRequest);
     const data = response.data?.data;
     if (!data) {
       throw new Error('createRelayer returned an empty response');
@@ -853,9 +855,6 @@ async function main(): Promise<void> {
 
     const existingSigner = await fetchSignerRecord(signersApi, signerId);
     const existingRelayer = await fetchRelayerRecord(relayersApi, relayerId);
-
-    const signerExistedBefore = Boolean(existingSigner);
-    const relayerExistedBefore = Boolean(existingRelayer);
 
     let signerRecord = existingSigner;
     let relayerRecord = existingRelayer;
