@@ -91,12 +91,24 @@ describe('validation', () => {
     expect(out.auth[0].credentials.type).toBe('sorobanCredentialsAddress');
   });
 
-  test('accepts CAP-71 addressV2 auth entries (Protocol 27+, replaces v1 at Protocol 28)', () => {
+  test('accepts CAP-71 addressV2 auth entries (Protocol 27+, stellar-sdk v17 default)', () => {
     const auth = [buildAuthEntry(xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials()))];
     const out = validateAndParseRequest({ func: hostFunctionXdr(), auth });
     expect(out.type).toBe('func-auth');
     if (out.type !== 'func-auth') return;
     expect(out.auth[0].credentials.type).toBe('sorobanCredentialsAddressV2');
+  });
+
+  test('accepts CAP-71 addressWithDelegates auth entries', () => {
+    const creds = new xdr.SorobanAddressCredentialsWithDelegates({
+      addressCredentials: addressCredentials(),
+      delegates: [],
+    });
+    const auth = [buildAuthEntry(xdr.SorobanCredentials.sorobanCredentialsAddressWithDelegates(creds))];
+    const out = validateAndParseRequest({ func: hostFunctionXdr(), auth });
+    expect(out.type).toBe('func-auth');
+    if (out.type !== 'func-auth') return;
+    expect(out.auth[0].credentials.type).toBe('sorobanCredentialsAddressWithDelegates');
   });
 
   test('rejects source-account auth entries', () => {

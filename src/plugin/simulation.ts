@@ -7,7 +7,7 @@
  * round-trip to the RPC node.
  */
 
-import { Account, inspectAuthEntry, Operation, rpc, Transaction, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
+import { Account, Operation, rpc, Transaction, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
 import { JsonRpcResponseNetworkRpcResult, pluginError, Relayer } from '@openzeppelin/relayer-sdk';
 import { HTTP_STATUS, SIMULATION, TIME } from './constants';
 
@@ -249,13 +249,23 @@ export function buildWithChannel(
  * Return the signatureExpirationLedger of an address-credentialed auth entry,
  * or undefined for source-account credentials (which carry no expiry).
  *
- * Uses the SDK's inspectAuthEntry so every credential variant is covered:
- * legacy `sorobanCredentialsAddress`, CAP-71 `sorobanCredentialsAddressV2`
- * (introduced in Protocol 27, the stellar-sdk v17 default, and slated to
- * replace v1 at the Protocol 28 upgrade) and the delegates form.
+ * Reads the expiry directly off the credential arm so every variant is covered
+ * with an exhaustive switch: legacy `sorobanCredentialsAddress`, CAP-71
+ * `sorobanCredentialsAddressV2` (introduced in Protocol 27, the stellar-sdk v17
+ * default) and `sorobanCredentialsAddressWithDelegates`.
  */
 export function getAddressCredentialExpiry(entry: xdr.SorobanAuthorizationEntry): number | undefined {
-  return inspectAuthEntry(entry).signatureExpirationLedger ?? undefined;
+  const creds = entry.credentials;
+  switch (creds.type) {
+    case 'sorobanCredentialsSourceAccount':
+      return undefined;
+    case 'sorobanCredentialsAddress':
+      return creds.address.signatureExpirationLedger;
+    case 'sorobanCredentialsAddressV2':
+      return creds.addressV2.signatureExpirationLedger;
+    case 'sorobanCredentialsAddressWithDelegates':
+      return creds.addressWithDelegates.addressCredentials.signatureExpirationLedger;
+  }
 }
 
 /**

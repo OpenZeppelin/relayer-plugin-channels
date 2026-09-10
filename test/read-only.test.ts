@@ -298,7 +298,10 @@ describe('buildWithChannel', () => {
 
   function buildAuthEntryXdr(
     expiryLedger: number,
-    variant: 'sorobanCredentialsAddress' | 'sorobanCredentialsAddressV2' = 'sorobanCredentialsAddress'
+    variant:
+      | 'sorobanCredentialsAddress'
+      | 'sorobanCredentialsAddressV2'
+      | 'sorobanCredentialsAddressWithDelegates' = 'sorobanCredentialsAddress'
   ): xdr.SorobanAuthorizationEntry {
     const addressCredentials = new xdr.SorobanAddressCredentials({
       address: xdr.ScAddress.scAddressTypeContract(new xdr.ContractId(new Uint8Array(32))),
@@ -310,7 +313,11 @@ describe('buildWithChannel', () => {
       credentials:
         variant === 'sorobanCredentialsAddressV2'
           ? xdr.SorobanCredentials.sorobanCredentialsAddressV2(addressCredentials)
-          : xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials),
+          : variant === 'sorobanCredentialsAddressWithDelegates'
+            ? xdr.SorobanCredentials.sorobanCredentialsAddressWithDelegates(
+                new xdr.SorobanAddressCredentialsWithDelegates({ addressCredentials, delegates: [] })
+              )
+            : xdr.SorobanCredentials.sorobanCredentialsAddress(addressCredentials),
       rootInvocation: new xdr.SorobanAuthorizedInvocation({
         function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
           new xdr.InvokeContractArgs({
@@ -327,6 +334,22 @@ describe('buildWithChannel', () => {
   test('rejects CAP-71 addressV2 auth entries with expiry below minSignatureExpirationLedgerBuffer', async () => {
     const latestLedger = 10000;
     const authEntry = buildAuthEntryXdr(latestLedger + 1, 'sorobanCredentialsAddressV2');
+    const rpcResult = {
+      results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
+      transactionData: buildWriteTransactionData(),
+      latestLedger,
+      minResourceFee: '100',
+    };
+    const channel = { address: SOURCE_ADDRESS, sequence: '1' };
+
+    expect(() => buildWithChannel(func, undefined, channel, passphrase, rpcResult as any)).toThrow(
+      expect.objectContaining({ code: 'AUTH_EXPIRY_TOO_SHORT' })
+    );
+  });
+
+  test('rejects CAP-71 addressWithDelegates auth entries with expiry below minSignatureExpirationLedgerBuffer', async () => {
+    const latestLedger = 10000;
+    const authEntry = buildAuthEntryXdr(latestLedger + 1, 'sorobanCredentialsAddressWithDelegates');
     const rpcResult = {
       results: [{ xdr: 'AAAAAQ==', auth: [authEntry.toXdr('base64')] }],
       transactionData: buildWriteTransactionData(),
