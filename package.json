@@ -58,8 +58,14 @@
   "engines": {
     "node": ">=22.18.0",
     "npm": "use pnpm",
-    "pnpm": ">=9",
+    "pnpm": ">=11",
     "yarn": "use pnpm"
   },
-  "packageManager": "pnpm@10.14.0"
+  "packageManager": "pnpm@11.1.0",
+  "pnpm": {
+    "minimumReleaseAge": 10080,
+    "minimumReleaseAgeExclude": [
+      "@openzeppelin/*"
+    ]
+  }
 }
