@@ -61,7 +61,7 @@ For manual installation and configuration details, continue reading below.
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js >= 22.18.0
 - pnpm >= 10
 - OpenZeppelin Relayer
 
