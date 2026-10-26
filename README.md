@@ -44,6 +44,7 @@ A plugin for OpenZeppelin Relayer that enables parallel transaction submission o
   - [Submit with Function and Auth](#submit-with-function-and-auth)
   - [Parameters](#parameters)
   - [Fire-and-Forget with skipWait](#fire-and-forget-with-skipwait)
+  - [Idempotent Submissions](#idempotent-submissions)
   - [Get Transaction by ID](#get-transaction-by-id)
   - [Response](#response)
 - [How It Works](#how-it-works)
@@ -256,6 +257,9 @@ export MAX_TIME_BOUND_OFFSET_SECONDS=60  # Max future offset for tx maxTime in s
 # Request timeouts (optional)
 export PLUGIN_GLOBAL_TIMEOUT_MS=30000    # Overall request timeout in ms (default: 30000)
 export PLUGIN_POLLING_TIMEOUT_MS=25000   # Transaction polling timeout in ms (default: 25000)
+
+# Idempotency-Key retention (optional)
+export IDEMPOTENCY_KEY_TTL_SECONDS=3600 # How long a key returns its transaction (default: 3600, min: 300)
 ```
 
 Your Relayer should now contain:
@@ -1009,6 +1013,7 @@ interface ChannelsClientConfig {
   adminSecret?: string; // Required for management operations
   timeout?: number; // Request timeout in ms (default: 30000)
   apiKeyHeader?: string; // Header name for API key (default: 'x-api-key')
+  pluginApiKey?: string; // Caller's own plugin API key, sent in apiKeyHeader (default: apiKey)
 }
 ```
 
@@ -1086,6 +1091,54 @@ Response:
 ```
 
 Use the returned `transactionId` with `getTransaction` to poll for the final status.
+
+### Idempotent Submissions
+
+Send an `Idempotency-Key` header with an `xdr` or `func`+`auth` submission to make retrying it safe. If the reply to a submission is lost (timeout, dropped connection), resend the same request with the same key: the plugin returns the transaction the first request created instead of submitting a second one.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "x-api-key: YOUR_PLUGIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 6f1c2a9e-3b6d-4f2e-9c1a-0d7e5b2f8a41" \
+  -d '{
+    "params": {
+      "func": "AAAABgAAAA...",
+      "auth": ["AAAABwAAAA..."],
+      "skipWait": true
+    }
+  }'
+```
+
+With the plugin client, pass `{ idempotencyKey }` as the second argument of `submitTransaction` or `submitSorobanTransaction`.
+
+**Requires OpenZeppelin Relayer 1.9.0 or later.** The plugin sends every transaction for a key with a fund relayer idempotency key, and relies on the Relayer to create at most one transaction per fund relayer key and to return it to a repeated send. Older Relayers ignore that key. Keep the Relayer's `IDEMPOTENCY_KEY_TTL_SECONDS` (default 24 hours) at least as long as the plugin's.
+
+| Repeated request with the same key                                                         | Result                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Same request, first one created a transaction                                              | That transaction, with its current `status` and `hash` (the first request's wait is not repeated; poll with `getTransaction`). A transaction that failed on chain returns the same `ONCHAIN_FAILED` error as the first request                                                                                                                                     |
+| Same request, first one is sending and its reply may still arrive (up to about 35 seconds) | `409 IDEMPOTENCY_KEY_IN_PROGRESS`; retry shortly                                                                                                                                                                                                                                                                                                                   |
+| Same request, first one sent its transaction but the reply was lost                        | The identical signed transaction is resent under the same fund relayer key, so the Relayer returns the transaction it created (or creates it if it has none). The response carries that transaction's `status`; one that failed on chain returns `ONCHAIN_FAILED`                                                                                                  |
+| Same request, and the fund relayer answers that resend with an error                       | `503 IDEMPOTENCY_KEY_SEND_FAILED`; retry with the same key, never a new one. The error (for example a paused relayer) does not show whether the original transaction exists, so the key keeps its stored transaction. Once that transaction's `maxTime` has passed, the response is `422 IDEMPOTENCY_KEY_OUTCOME_UNKNOWN` instead, so you can check it and move on |
+| Same request, and the Relayer no longer has the transaction (pruned after it became final) | `422 IDEMPOTENCY_KEY_OUTCOME_UNKNOWN`; see below                                                                                                                                                                                                                                                                                                                   |
+| Same request, first one has not sent yet                                                   | `409 IDEMPOTENCY_KEY_IN_PROGRESS`; retry shortly                                                                                                                                                                                                                                                                                                                   |
+| Different request                                                                          | `422 IDEMPOTENCY_KEY_REUSED`                                                                                                                                                                                                                                                                                                                                       |
+| First one failed before sending                                                            | Processed as a new request                                                                                                                                                                                                                                                                                                                                         |
+| First one's send got a fund relayer error                                                  | The first request already returned `503 IDEMPOTENCY_KEY_SEND_FAILED`. A repeat resends the stored transaction right away (no `409` wait), as in the lost-reply row                                                                                                                                                                                                 |
+
+Notes:
+
+- A signed `xdr` sent with a key must set `timeBounds.maxTime` (`400 TIMEBOUNDS_REQUIRED` otherwise): the stored transaction is resent until it lands or expires, and one that never expires could leave its key retrying for ever. `func`+`auth` and unsigned `xdr` transactions are built with time bounds.
+- The key is 1 to 255 visible ASCII characters (the Relayer drops header values with other characters, which would make the call not idempotent). Keys are scoped to the caller: the API key header (`x-api-key`, or `API_KEY_HEADER`), or the `Authorization` header when there is no API key. A key sent with neither is rejected with `400 API_KEY_REQUIRED`. The Relayer has a single API key, so callers that rely on the `Authorization` fallback, or that send the Relayer API key as their plugin API key, share one namespace. Give each caller its own plugin API key to keep their keys apart; with the plugin client in Relayer mode, set `pluginApiKey` (by default the client sends the Relayer API key in `apiKeyHeader`).
+- Keys are kept for `IDEMPOTENCY_KEY_TTL_SECONDS` (default 1 hour, minimum 5 minutes; raised automatically to the transaction's lifetime when that is longer). This is the longest a caller can wait before retrying a lost reply: a retry after the key has expired is processed as a new request.
+- Choose the key's scope to match what you want deduplicated. Use a key unique to one logical operation, for example one settlement attempt; reusing a key across operations makes them share a transaction.
+- Before sending, the plugin stores the exact signed fee bump request under the key, and it never builds a second transaction for a key that has one. Once the transaction id is recorded, the stored request is dropped and the record shrinks to about 200 bytes.
+- Once the transaction is stored under the key, a send error never frees the key, and the response is `503 IDEMPOTENCY_KEY_SEND_FAILED` telling the caller to retry the same key: the Relayer checks the relayer (paused, disabled) and its storage before it looks an idempotency key up, and can fail after storing a transaction, so an error does not show that no transaction exists. Only the stored transaction is ever sent again, which is always safe: the Relayer returns the transaction it holds for the fund relayer key, or creates it once. For `func`+`auth` and unsigned `xdr`, the channel account stays locked until the transaction expires, since a repeat resends on its sequence. During a fund relayer outage each such request holds its channel account until the transaction expires, so keyed traffic can use up the pool.
+- A transaction the Relayer failed because it could not queue its jobs ("Queue unavailable", no hash) was never submitted: it returns `502 TRANSACTION_NOT_SUBMITTED` instead of `ONCHAIN_FAILED`, and a repeat does not charge it. Other failures without a hash are still reported as `ONCHAIN_FAILED`, since the Relayer clears the hash when it resets a transaction after a bad sequence. Every repeat returns the same error, since the key is bound to that transaction: resubmit with a new key, which is safe.
+- `IDEMPOTENCY_KEY_OUTCOME_UNKNOWN` means the outcome cannot be read from the Relayer: the stored transaction expired while resends kept getting errors, or the Relayer no longer has the key's transaction: it completed and was removed from the Relayer's storage (`TRANSACTION_EXPIRATION_HOURS`, by default 4 hours after it became final), or its create stopped before storing it. Keep the plugin's `IDEMPOTENCY_KEY_TTL_SECONDS` below that age to avoid it. The error gives `details.innerHash`, `details.source` (the channel account), `details.sequence` and `details.maxTime`. `innerHash` is the hash of the inner transaction; the fund relayer wraps it in a fee bump, which the network records under a different hash, so a lookup by `innerHash` can come back empty for a transaction that landed. Search the transactions of `details.source` for a fee bump whose inner transaction hash is `innerHash` before retrying with a new key.
+- A transaction sent under a key is charged against the API key's fee budget once, whether by the first request or by a repeat (for example when the first request's wait timed out or its reply was lost). As for a request without a key, it is charged when it is `confirmed` or `failed` on chain, or at send with `skipWait` (before its outcome is known); a repeat that finds it still pending, expired or not submitted does not charge it.
+- If the first request stopped after reserving the key but before sending, a retry gets `409` until the request budget (global timeout plus `maxTimeBoundOffsetSeconds` plus one ledger of channel cooldown) has passed, then is processed as a new request.
 
 ### Get Transaction by ID
 
@@ -1203,6 +1256,14 @@ Plugin error example:
 - **Key**: `<network>:channel:seq:<address>`
 - **Value**: `{ sequence: string, storedAt: number }` (sequence number and cache timestamp in ms)
 
+### Idempotency Keys
+
+- **Key**: `<network>:idempotency:<sha256(scope + "\n" + key)>`, where `scope` is `api-key:<API key>` or `authorization:<Authorization header>`
+- **Value**: `{ fingerprint, reservedAt, payload?, sentAt?, maxFee?, transactionId?, transaction? }`. While a send is unresolved the record holds the signed fee bump request (`payload`, about 2 KB) and its send time; once the transaction is created it holds `transactionId`, `maxFee` and the inner transaction's `{ innerHash, source, sequence, maxTime }` (about 400 bytes).
+- **TTL**: `IDEMPOTENCY_KEY_TTL_SECONDS` (default 1 hour)
+- **Fund relayer key**: `channels-idempotency:<digest>:<reservedAt>`, sent with every send for a reservation
+- **Fee marker key**: `<network>:idempotency:<digest>:<reservedAt>:fee`, one per reservation (a marker can outlive its record, and a later reservation of the key is a new transaction), written right after the transaction's fee is added to the API key's consumption (under the same lock), so a repeat does not charge it again. A failed consumption update leaves no marker, so a later repeat records the fee.
+
 ## Error Codes
 
 ### Configuration
@@ -1220,8 +1281,15 @@ Plugin error example:
 - `INVALID_TIME_BOUNDS`: TimeBounds too far in the future
 - `TIMEBOUNDS_EXPIRED`: Transaction timebounds have expired
 - `TIMEBOUNDS_TOO_FAR`: Transaction timebounds maxTime too far in the future
+- `TIMEBOUNDS_REQUIRED`: A signed XDR sent with an `Idempotency-Key` has no `timeBounds.maxTime` (HTTP 400)
 - `FEE_MISMATCH`: Fee mismatch in signed transaction
 - `INVALID_OPERATION_SOURCE`: Operation source does not match transaction source
+- `INVALID_IDEMPOTENCY_KEY`: `Idempotency-Key` header is empty, longer than 255 characters, or has characters outside visible ASCII (HTTP 400)
+- `IDEMPOTENCY_KEY_IN_PROGRESS`: Another request with this `Idempotency-Key` has not created its transaction yet (HTTP 409)
+- `IDEMPOTENCY_KEY_REUSED`: `Idempotency-Key` reused with a different request (HTTP 422)
+- `IDEMPOTENCY_KEY_SEND_FAILED`: The fund relayer returned an error for the transaction stored under this `Idempotency-Key`; it may still have been stored, so retry with the same key, never a new one (HTTP 503)
+- `IDEMPOTENCY_KEY_OUTCOME_UNKNOWN`: The outcome of the transaction sent for this `Idempotency-Key` cannot be read from the Relayer (it expired while resends got errors, or the Relayer no longer has it); check whether it landed before using a new key (HTTP 422)
+- `TRANSACTION_NOT_SUBMITTED`: The fund relayer failed the transaction before submitting it to the network because it could not queue it. Under an `Idempotency-Key` the key is spent; nothing reached the network, so resubmitting with a new key is safe (HTTP 502)
 
 ### Pool & Channel
 
@@ -1230,6 +1298,7 @@ Plugin error example:
 - `RELAYER_UNAVAILABLE`: Relayer not found
 - `FAILED_TO_GET_SEQUENCE`: Failed to fetch channel account sequence number
 - `ACCOUNT_NOT_FOUND`: Channel account not found on the ledger
+- `CHANNEL_LOCK_LOST`: The channel account lock expired before the transaction was sent; nothing was sent, retry the request (HTTP 503)
 
 ### Simulation & Assembly
 
@@ -1248,7 +1317,7 @@ Plugin error example:
 
 ### Fee Tracking
 
-- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured
+- `API_KEY_REQUIRED`: API key header missing when `FEE_LIMIT` is configured, or an `Idempotency-Key` sent with neither an API key nor an `Authorization` header
 - `FEE_LIMIT_EXCEEDED`: API key has exceeded its fee limit (HTTP 429)
 
 ### Management

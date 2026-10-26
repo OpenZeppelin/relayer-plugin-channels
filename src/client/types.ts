@@ -30,6 +30,13 @@ export interface RelayerConfig {
   timeout?: number;
   /** Header name for API key forwarding to plugin (default: 'x-api-key') */
   apiKeyHeader?: string;
+  /**
+   * Key sent to the plugin in `apiKeyHeader`, identifying this caller for fee
+   * limits and for the scope of Idempotency-Key values. Defaults to `apiKey`,
+   * the Relayer API key, which every caller of the Relayer shares: set a key
+   * of your own so other callers cannot reuse or see your Idempotency-Keys.
+   */
+  pluginApiKey?: string;
 }
 
 /**
@@ -50,6 +57,19 @@ export interface ChannelsXdrRequest {
   skipWait?: boolean;
   /** Alternative fund relayer ID for fee bumping (must be in the allowed list) */
   fundRelayerId?: string;
+}
+
+/**
+ * Options for a transaction submission
+ */
+export interface ChannelsSubmitOptions {
+  /**
+   * Sent as the `Idempotency-Key` header. A repeated submission with the same
+   * key and request returns the transaction the first one created instead of
+   * creating another. Use a key unique to the operation you want deduplicated:
+   * 1 to 255 visible ASCII characters.
+   */
+  idempotencyKey?: string;
 }
 
 /**

@@ -6,7 +6,7 @@
 
 import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE } from './constants';
+import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE, IDEMPOTENCY } from './constants';
 
 // Default inclusion fees (matching launchtube)
 const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + DYNAMIC_FEE.FEE_BUMP_MARGIN_DEFAULT; // 203
@@ -31,6 +31,8 @@ export interface ChannelAccountsConfig {
   maxTimeBoundOffsetSeconds: number;
   globalTimeoutMs: number;
   pollingTimeoutMs: number;
+  /** How long an Idempotency-Key keeps returning its transaction */
+  idempotencyKeyTtlSeconds: number;
 }
 
 function requireEnv(name: string): string {
@@ -58,6 +60,19 @@ function parseLockTtl(): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < CONFIG.MIN_LOCK_TTL_SECONDS || n > CONFIG.MAX_LOCK_TTL_SECONDS) {
     return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
+  }
+  return Math.floor(n);
+}
+
+function parseIdempotencyKeyTtl(): number {
+  const raw = process.env.IDEMPOTENCY_KEY_TTL_SECONDS;
+  if (!raw) return IDEMPOTENCY.TTL_SECONDS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < IDEMPOTENCY.MIN_TTL_SECONDS) {
+    console.warn(
+      `[channels] Ignoring IDEMPOTENCY_KEY_TTL_SECONDS=${raw}: must be at least ${IDEMPOTENCY.MIN_TTL_SECONDS}; using ${IDEMPOTENCY.TTL_SECONDS}`
+    );
+    return IDEMPOTENCY.TTL_SECONDS;
   }
   return Math.floor(n);
 }
@@ -202,6 +217,7 @@ export function loadConfig(): ChannelAccountsConfig {
     maxTimeBoundOffsetSeconds: parseMaxTimeBoundOffsetSeconds(),
     globalTimeoutMs: parseGlobalTimeoutMs(),
     pollingTimeoutMs: parsePollingTimeoutMs(),
+    idempotencyKeyTtlSeconds: parseIdempotencyKeyTtl(),
   };
 }
 

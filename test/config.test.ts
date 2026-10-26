@@ -36,6 +36,20 @@ describe('config', () => {
     expect(getNetworkPassphrase('mainnet')).toBe(Networks.PUBLIC);
   });
 
+  test('IDEMPOTENCY_KEY_TTL_SECONDS defaults to 1h and ignores invalid values', () => {
+    delete process.env.IDEMPOTENCY_KEY_TTL_SECONDS;
+    expect(loadConfig().idempotencyKeyTtlSeconds).toBe(3_600);
+    process.env.IDEMPOTENCY_KEY_TTL_SECONDS = '86400';
+    expect(loadConfig().idempotencyKeyTtlSeconds).toBe(86_400);
+    process.env.IDEMPOTENCY_KEY_TTL_SECONDS = '300';
+    expect(loadConfig().idempotencyKeyTtlSeconds).toBe(300);
+    process.env.IDEMPOTENCY_KEY_TTL_SECONDS = '299';
+    expect(loadConfig().idempotencyKeyTtlSeconds).toBe(3_600);
+    process.env.IDEMPOTENCY_KEY_TTL_SECONDS = 'abc';
+    expect(loadConfig().idempotencyKeyTtlSeconds).toBe(3_600);
+    delete process.env.IDEMPOTENCY_KEY_TTL_SECONDS;
+  });
+
   test('lock ttl bounds', () => {
     delete process.env.LOCK_TTL_SECONDS;
     expect(loadConfig().lockTtlSeconds).toBe(30);
