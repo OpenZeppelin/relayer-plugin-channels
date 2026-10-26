@@ -436,6 +436,20 @@ describe('idempotent submission', () => {
       expect(ttlSec).toBeGreaterThan(60);
     });
 
+    test('never renews the channel lock for less than the lock TTL, which covers the wait', async () => {
+      // Short time bounds: expiry plus cooldown (about 16s) is below the 30s lock TTL
+      configOverride = { maxTimeBoundOffsetSeconds: 10 };
+      (submitWithFeeBumpAndWait as any).mockImplementationOnce(async (...args: any[]) => {
+        await args[7]?.beforeSubmit?.(PAYLOAD);
+        return { transactionId: 'tx-1', status: 'confirmed', hash: 'hash-tx-1' };
+      });
+
+      await handler(makeContext());
+
+      const [, ttlSec] = poolSpies.renewLock.mock.calls[0];
+      expect(ttlSec).toBe(30);
+    });
+
     test('does not send when the channel lock was already lost', async () => {
       poolSpies.renewLock.mockResolvedValueOnce(false);
       const sent = vi.fn();

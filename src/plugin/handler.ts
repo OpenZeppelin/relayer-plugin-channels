@@ -349,14 +349,16 @@ async function handleFuncAuthSubmit(
       isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
       beforeSubmit: async (payload) => {
         // Hold the channel until the transaction expires before sending, so it
-        // stays locked however long the send takes or if its reply is lost.
-        // A lock already lost means another request may use this sequence.
+        // stays locked however long the send takes or if its reply is lost,
+        // and never for less than the usual lock TTL, which covers the wait.
+        // A lock that cannot be confirmed means another request may use this
+        // sequence.
         const held = await ctx.pool.renewLock(
           poolLock!,
-          computeExtendTtlSec(txBuildTime, ctx.config.maxTimeBoundOffsetSeconds)
+          Math.max(ctx.config.lockTtlSeconds, computeExtendTtlSec(txBuildTime, ctx.config.maxTimeBoundOffsetSeconds))
         );
         if (!held) {
-          throw pluginError('Channel account lock was lost before sending', {
+          throw pluginError('Could not confirm the channel account lock before sending', {
             code: 'CHANNEL_LOCK_LOST',
             status: HTTP_STATUS.SERVICE_UNAVAILABLE,
             details: { relayerId: poolLock!.relayerId },
