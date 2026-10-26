@@ -50,6 +50,12 @@ export interface FeeBumpPayload {
 interface IdempotencyRecord {
   fingerprint: string;
   reservedAt: number;
+  /**
+   * When the record expires (ms), fixed at reservation. Every write keeps it,
+   * so repeats do not extend the record past the fee marker that stops the
+   * transaction from being charged twice.
+   */
+  expiresAt: number;
   payload?: FeeBumpPayload;
   sentAt?: number;
   maxFee?: number;
@@ -77,8 +83,13 @@ export interface IdempotencyReservation {
   recordKey: string;
   fingerprint: string;
   reservedAt: number;
-  /** How long the record and its fee marker are kept */
-  ttlSec: number;
+  /** When the record expires (ms), fixed at reservation */
+  expiresAt: number;
+}
+
+/** Seconds until a reservation's record expires (at least 1, for the KV TTL). */
+export function recordTtlSec(reservation: Pick<IdempotencyReservation, 'expiresAt'>, now = Date.now()): number {
+  return Math.max(1, Math.ceil((reservation.expiresAt - now) / 1000));
 }
 
 export interface ReserveOptions {
@@ -192,7 +203,12 @@ export async function reserveIdempotencyKey(
             status: HTTP_STATUS.UNPROCESSABLE_ENTITY,
           });
         }
-        const reservation = { recordKey, fingerprint, reservedAt: existing.reservedAt, ttlSec };
+        const reservation = {
+          recordKey,
+          fingerprint,
+          reservedAt: existing.reservedAt,
+          expiresAt: existing.expiresAt ?? existing.reservedAt + ttlSec * 1000,
+        };
         if (existing.transactionId) {
           return {
             kind: 'existing',
@@ -205,7 +221,9 @@ export async function reserveIdempotencyKey(
         if (existing.payload) {
           if (now - (existing.sentAt ?? 0) < sendWindowMs) throw inProgressError();
           // Re-arm the send window so concurrent repeats do not all resend
-          await kv.set(recordKey, { ...existing, sentAt: now } satisfies IdempotencyRecord, { ttlSec });
+          await kv.set(recordKey, { ...existing, sentAt: now } satisfies IdempotencyRecord, {
+            ttlSec: recordTtlSec(reservation, now),
+          });
           return { kind: 'unresolved', reservation, payload: existing.payload };
         }
         if (now - existing.reservedAt < reservationWindowMs) {
@@ -214,9 +232,12 @@ export async function reserveIdempotencyKey(
         console.warn('[channels] Taking over an Idempotency-Key reservation that was never sent');
       }
 
-      const record: IdempotencyRecord = { fingerprint, reservedAt: now };
+      const record: IdempotencyRecord = { fingerprint, reservedAt: now, expiresAt: now + ttlSec * 1000 };
       await kv.set(recordKey, record, { ttlSec });
-      return { kind: 'reserved', reservation: { recordKey, fingerprint, reservedAt: now, ttlSec } };
+      return {
+        kind: 'reserved',
+        reservation: { recordKey, fingerprint, reservedAt: now, expiresAt: record.expiresAt },
+      };
     },
     { ttlSec: IDEMPOTENCY.LOCK_TTL_SECONDS, onBusy: 'skip' }
   );
@@ -273,10 +294,11 @@ export async function storeIdempotentPayload(
     const next: IdempotencyRecord = {
       fingerprint: reservation.fingerprint,
       reservedAt: reservation.reservedAt,
+      expiresAt: reservation.expiresAt,
       payload,
       sentAt: Date.now(),
     };
-    await kv.set(reservation.recordKey, next, { ttlSec: reservation.ttlSec });
+    await kv.set(reservation.recordKey, next, { ttlSec: recordTtlSec(reservation) });
     return true;
   });
   if (!stored) throw inProgressError();
@@ -305,11 +327,12 @@ export async function recordIdempotentTransaction(
       const next: IdempotencyRecord = {
         fingerprint: reservation.fingerprint,
         reservedAt: reservation.reservedAt,
+        expiresAt: reservation.expiresAt,
         maxFee,
         transactionId,
         transaction,
       };
-      await kv.set(reservation.recordKey, next, { ttlSec: reservation.ttlSec });
+      await kv.set(reservation.recordKey, next, { ttlSec: recordTtlSec(reservation) });
       return true;
     });
     if (!written) console.warn('[channels] Idempotency-Key record stayed locked; transaction not recorded');
@@ -321,11 +344,21 @@ export async function recordIdempotentTransaction(
 /**
  * KV key marking that the transaction sent under a reserved key has been
  * charged against the API key's fee budget (see FeeTracker.recordUsageOnce).
+ * It must outlive the record (see feeMarkerTtlSec), or a later repeat of the
+ * same transaction would be charged again.
  */
 export function idempotencyFeeKey(reservation: IdempotencyReservation): string {
   // Per reservation: a marker can outlive its record, and a later reservation
   // of the same key is a new transaction that must be charged
   return `${reservation.recordKey}:${reservation.reservedAt}:fee`;
+}
+
+/**
+ * TTL for a reservation's fee marker: past the record's fixed expiry, so no
+ * repeat of the transaction can find the record without its marker.
+ */
+export function feeMarkerTtlSec(reservation: Pick<IdempotencyReservation, 'expiresAt'>, now = Date.now()): number {
+  return recordTtlSec(reservation, now) + IDEMPOTENCY.FEE_MARKER_MARGIN_SECONDS;
 }
 
 /**
@@ -348,7 +381,7 @@ export async function markSendRejected(kv: PluginKVStore, reservation: Idempoten
     await withRecordLock(kv, reservation, async (record) => {
       if (record?.reservedAt !== reservation.reservedAt || !record.payload || record.transactionId) return;
       await kv.set(reservation.recordKey, { ...record, sentAt: 0 } satisfies IdempotencyRecord, {
-        ttlSec: reservation.ttlSec,
+        ttlSec: recordTtlSec(reservation),
       });
     });
   } catch (error) {

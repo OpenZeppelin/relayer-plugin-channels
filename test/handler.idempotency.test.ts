@@ -608,6 +608,58 @@ describe('idempotent submission', () => {
       expect(recordUsage).toHaveBeenCalledTimes(2);
     });
 
+    test('a recovered transaction is never charged again while its record exists (real fee tracker and KV expiry)', async () => {
+      // Reviewer's case: the id write fails but the fee is recorded; a later
+      // repeat recovers the id. The marker must outlive every later record write.
+      const actual = await vi.importActual<typeof import('../src/plugin/fee-tracking')>('../src/plugin/fee-tracking');
+      (FeeTracker as any).mockImplementation(function (config: any) {
+        return new actual.FeeTracker(config);
+      });
+      configOverride = { idempotencyKeyTtlSeconds: 300 };
+      const consumed = async () =>
+        ((await kv.get<{ consumed: number }>('testnet:api-key-fees:caller-a')) ?? { consumed: 0 }).consumed;
+
+      (submitWithFeeBumpAndWait as any).mockImplementation(async (...args: any[]) => {
+        const [, , , maxFee, , , tracker, submitContext] = args;
+        await submitContext.beforeSubmit(PAYLOAD);
+        await submitContext.onSubmitted('tx-1');
+        await tracker.recordUsageOnce(maxFee, submitContext.feeMarkerKey, submitContext.feeMarkerTtlSec);
+        return { transactionId: 'tx-1', status: 'confirmed', hash: 'hash-tx-1' };
+      });
+      const set = kv.set.bind(kv);
+      const failIdWrite = vi.spyOn(kv, 'set').mockImplementation(async (key: string, value: any, opts?: any) => {
+        if (value?.transactionId) throw new Error('kv down');
+        return set(key, value, opts);
+      });
+      await handler(makeContext(API_KEY));
+      failIdWrite.mockRestore();
+      expect(await consumed()).toBe(1000);
+
+      // Recovery at 40s rewrites the record
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const start = Date.now();
+      vi.setSystemTime(start + 40_000);
+      const recovery = makeContext(API_KEY);
+      fundRelayer.sendTransaction = vi.fn().mockResolvedValue({ id: 'tx-1', status: 'confirmed', hash: 'hash-tx-1' });
+      await handler(recovery);
+      expect(await consumed()).toBe(1000);
+
+      // Whenever the record still exists, a repeat finds the marker too
+      for (const at of [299_000, 310_000, 340_000]) {
+        vi.setSystemTime(start + at);
+        const [recordKey] = (await kv.listKeys('testnet:idempotency:*')).filter((k) => !k.endsWith(':fee'));
+        if (!recordKey) continue;
+        const repeat = makeContext(API_KEY);
+        fundRelayer.getTransaction.mockResolvedValue({ id: 'tx-1', status: 'confirmed', hash: 'hash-tx-1' });
+        await handler(repeat);
+        expect(await consumed()).toBe(1000);
+      }
+
+      // The record kept its fixed expiry: gone at 310s, not extended to 340s by the recovery
+      vi.setSystemTime(start + 310_000);
+      expect((await kv.listKeys('testnet:idempotency:*')).filter((k) => !k.endsWith(':fee'))).toEqual([]);
+    });
+
     test('concurrent recoveries charge once', async () => {
       submitLosesReply();
       await expect(handler(makeContext(API_KEY))).rejects.toThrow('timed out');

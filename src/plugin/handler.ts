@@ -42,6 +42,7 @@ import {
   describeStoredTransaction,
   effectiveIdempotencyTtlSec,
   FeeBumpPayload,
+  feeMarkerTtlSec,
   fundRelayerIdempotencyKey,
   getIdempotencyKey,
   idempotencyFeeKey,
@@ -449,7 +450,7 @@ async function chargeIdempotentFeeOnce(
   // for a request without a key
   const charged = final.status === 'confirmed' || (final.status === 'failed' && !isNotSubmitted(final));
   if (!tracker || maxFee === undefined || !charged) return;
-  await tracker.recordUsageOnce(maxFee, idempotencyFeeKey(reservation), reservation.ttlSec);
+  await tracker.recordUsageOnce(maxFee, idempotencyFeeKey(reservation), feeMarkerTtlSec(reservation));
 }
 
 /**
@@ -731,7 +732,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       },
       fundRelayerIdempotencyKey: fundRelayerIdempotencyKey(reservation),
       feeMarkerKey: idempotencyFeeKey(reservation),
-      feeMarkerTtlSec: reservation.ttlSec,
+      feeMarkerTtlSec: feeMarkerTtlSec(reservation),
     });
     // Read-only calls send nothing
     if (!sentPayload) await releaseIdempotencyKey(kv, reservation);

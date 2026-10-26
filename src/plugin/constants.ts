@@ -89,6 +89,8 @@ export const IDEMPOTENCY = {
   RECORD_LOCK_ATTEMPTS: 10,
   /** The plugin runtime's socket timeout (30s) plus margin: a send's reply can arrive this long after it started */
   SEND_REPLY_WINDOW_MS: 35_000,
+  /** How long a fee marker outlives its record, for clock drift between workers */
+  FEE_MARKER_MARGIN_SECONDS: 300,
   /**
    * Margin past a stored transaction's maxTime before it counts as expired:
    * validators compare maxTime with the ledger close time, which can trail
