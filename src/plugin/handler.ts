@@ -6,14 +6,27 @@
  */
 
 import { PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
-import type { PluginAPI, PluginKVStore, Relayer } from '@openzeppelin/relayer-sdk';
+import type { PluginAPI, PluginKVStore, Relayer, StellarTransactionResponse } from '@openzeppelin/relayer-sdk';
 import { PoolLock, ChannelPool, AcquireOptions } from './pool';
 import { loadConfig, getNetworkPassphrase, ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { validateAndParseRequest } from './validation';
 import { isManagementRequest, handleManagement } from './management';
-import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from './submit';
-import { HTTP_STATUS, POOL, RELAYER_INFO_CACHE_TTL_SECONDS } from './constants';
+import {
+  isSendRejected,
+  isTransactionNotFound,
+  notSubmittedError,
+  isNotSubmitted,
+  onchainFailedError,
+  RELAYER_IN_PROGRESS_MESSAGE,
+  RELAYER_PAYLOAD_MISMATCH_MESSAGE,
+  RELAYER_TRANSACTION_GONE_MESSAGE,
+  sendFeeBump,
+  signWithChannelAndFund,
+  submitWithFeeBumpAndWait,
+  SubmitContext,
+} from './submit';
+import { HTTP_STATUS, IDEMPOTENCY, POOL, RELAYER_INFO_CACHE_TTL_SECONDS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
 import { calculateMaxFee, getContractIdFromFunc, InclusionFees, getContractIdFromTransaction } from './fee';
@@ -26,6 +39,30 @@ import {
 import { validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 import { getSequence, commitSequence, clearSequence } from './sequence';
+import {
+  describeStoredTransaction,
+  effectiveIdempotencyTtlSec,
+  FeeBumpPayload,
+  feeMarkerTtlSec,
+  fundRelayerIdempotencyKey,
+  getIdempotencyKey,
+  idempotencyFeeKey,
+  idempotencyRecordKey,
+  idempotencyScope,
+  IdempotencyReservation,
+  inProgressError,
+  keyConflictError,
+  markSendRejected,
+  outcomeUnknownError,
+  recordIdempotentTransaction,
+  releaseIdempotencyKey,
+  requestFingerprint,
+  sendFailedError,
+  hasStoredTransactionExpired,
+  reserveIdempotencyKey,
+  storeIdempotentPayload,
+  type StoredTransaction,
+} from './idempotency';
 
 /** Subset of relayer metadata used by the plugin (address + network_type). */
 type CachedRelayerInfo = { address: string; network_type: string };
@@ -79,6 +116,18 @@ interface PipelineContext {
   tracker: FeeTracker | undefined;
   config: ChannelAccountsConfig;
   startTime: number;
+  /** Called with the exact payload before it is sent */
+  beforeSubmit?: (payload: FeeBumpPayload) => Promise<void>;
+  /** Called once the fund relayer has created the transaction */
+  onSubmitted?: (transactionId: string) => Promise<void>;
+  /** Fund relayer idempotency key for the send */
+  fundRelayerIdempotencyKey?: string;
+  /** Called when the fund relayer answered the send with an error (see isSendRejected) */
+  onSendRejected?: () => Promise<void>;
+  /** When set, the fee is recorded once per transaction, under the marker key for its id */
+  feeMarkerKey?: (transactionId: string) => string;
+  /** How long the fee marker is kept, read when the fee is recorded */
+  feeMarkerTtlSec?: () => number;
 }
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
@@ -155,12 +204,26 @@ async function handleXdrSubmit(
   }
 
   const validated = validateExistingTransactionForSubmitOnly(tx, ctx.config);
+  // Under an Idempotency-Key a stored transaction is resent until it lands or
+  // expires; one that never expires would keep its key retrying for ever
+  if (ctx.fundRelayerIdempotencyKey && !(Number(validated.timeBounds?.maxTime ?? 0) > 0)) {
+    throw pluginError('A signed XDR sent with an Idempotency-Key must set timeBounds.maxTime', {
+      code: 'TIMEBOUNDS_REQUIRED',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
   const maxFee = calculateMaxFee(validated, ctx.acquireOptions.limitedContracts, ctx.fees);
   const contractId = getContractIdFromTransaction(validated);
   await ctx.tracker?.checkBudget(maxFee);
   const submitContext: SubmitContext = {
     contractId,
     isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
+    beforeSubmit: ctx.beforeSubmit,
+    onSubmitted: ctx.onSubmitted,
+    onSendRejected: ctx.onSendRejected,
+    fundRelayerIdempotencyKey: ctx.fundRelayerIdempotencyKey,
+    feeMarkerKey: ctx.feeMarkerKey,
+    feeMarkerTtlSec: ctx.feeMarkerTtlSec,
   };
   return submitWithFeeBumpAndWait(
     ctx.fundRelayer,
@@ -261,9 +324,61 @@ async function handleFuncAuthSubmit(
     console.debug(`[channels] After signing: signedTx.fee=${signedTx.fee}, maxFee=${maxFee}`);
     const contractId = getContractIdFromFunc(func);
     await ctx.tracker?.checkBudget(maxFee);
+    // Track the send so a failure after it started keeps the channel locked
+    // while the transaction may be pending on this channel's sequence (the
+    // reply was lost, or bookkeeping failed after it was accepted).
+    //
+    // Without an Idempotency-Key a fund relayer error frees the channel,
+    // although the Relayer may have stored the transaction and submit it
+    // later. Holding the channel on every error would exhaust the pool during
+    // a relayer outage. On the channel a wrong guess only makes the next
+    // transaction share the sequence, so one of the two fails; but a caller
+    // who resubmits after the error can execute twice, which is what an
+    // Idempotency-Key prevents.
+    //
+    // Under a key the channel is kept: a repeat resends the stored transaction
+    // on this channel's sequence, so releasing it would let another request
+    // build on the same sequence. The cost is that during a fund relayer
+    // outage each keyed request holds its channel until its transaction
+    // expires, so keyed traffic can use up the pool.
+    const resendable = ctx.fundRelayerIdempotencyKey !== undefined;
+    // Set once the payload store is attempted: a write that lands but throws
+    // leaves a payload a repeat will resend on this channel's sequence
+    let payloadStoreStarted = false;
+    let sendStarted = false;
+    let sendRejected = false;
     const submitContext: SubmitContext = {
       contractId,
       isLimited: contractId ? ctx.acquireOptions.limitedContracts.has(contractId) : false,
+      beforeSubmit: async (payload) => {
+        // Hold the channel until the transaction expires before sending, so it
+        // stays locked however long the send takes or if its reply is lost,
+        // and never for less than the usual lock TTL, which covers the wait.
+        // A lock that cannot be confirmed means another request may use this
+        // sequence.
+        const held = await ctx.pool.renewLock(
+          poolLock!,
+          Math.max(ctx.config.lockTtlSeconds, computeExtendTtlSec(txBuildTime, ctx.config.maxTimeBoundOffsetSeconds))
+        );
+        if (!held) {
+          throw pluginError('Could not confirm the channel account lock before sending', {
+            code: 'CHANNEL_LOCK_LOST',
+            status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+            details: { relayerId: poolLock!.relayerId },
+          });
+        }
+        payloadStoreStarted = true;
+        await ctx.beforeSubmit?.(payload);
+        sendStarted = true;
+      },
+      onSubmitted: ctx.onSubmitted,
+      onSendRejected: async () => {
+        sendRejected = true;
+        await ctx.onSendRejected?.();
+      },
+      fundRelayerIdempotencyKey: ctx.fundRelayerIdempotencyKey,
+      feeMarkerKey: ctx.feeMarkerKey,
+      feeMarkerTtlSec: ctx.feeMarkerTtlSec,
     };
     try {
       const result = await submitWithFeeBumpAndWait(
@@ -295,9 +410,17 @@ async function handleFuncAuthSubmit(
     } catch (error: any) {
       await clearSequence(ctx.kv, ctx.network, channelInfo.address);
 
-      if (error.code === 'WAIT_TIMEOUT' && poolLock) {
+      // Once the send has started, only an on-chain failure, a transaction the
+      // Relayer failed before submitting, or a rejected send that will not be
+      // resent, is a known outcome
+      const settled = error.code === 'ONCHAIN_FAILED' || error.code === 'TRANSACTION_NOT_SUBMITTED';
+      const outcomeUnknown =
+        error.code === 'WAIT_TIMEOUT' ||
+        (sendStarted && (!sendRejected || resendable) && !settled) ||
+        (resendable && payloadStoreStarted && !sendStarted);
+      if (outcomeUnknown && poolLock) {
         const extendSec = computeExtendTtlSec(txBuildTime, ctx.config.maxTimeBoundOffsetSeconds);
-        console.log(`[channels] Extending lock for WAIT_TIMEOUT (${extendSec}s)`);
+        console.log(`[channels] Extending lock for unknown submission outcome (${extendSec}s)`);
         await ctx.pool.extendLock(poolLock, extendSec);
         poolLock = undefined; // skip release in finally
       } else if (error.code === 'ONCHAIN_FAILED') {
@@ -316,6 +439,43 @@ async function handleFuncAuthSubmit(
       }
     }
   }
+}
+
+/**
+ * Charges a transaction sent under an Idempotency-Key against the API key's
+ * fee budget, once across the original request and all repeats.
+ */
+async function chargeIdempotentFeeOnce(
+  tracker: FeeTracker | undefined,
+  reservation: IdempotencyReservation,
+  transactionId: string,
+  maxFee: number | undefined,
+  transaction: StoredTransaction | undefined,
+  final: { status: string; hash?: string | null; status_reason?: string | null }
+): Promise<void> {
+  // Only a final transaction that reached the network has used its fee, as
+  // for a request without a key
+  const charged = final.status === 'confirmed' || (final.status === 'failed' && !isNotSubmitted(final));
+  if (!tracker || maxFee === undefined || !charged) return;
+  await tracker.recordUsageOnce(
+    maxFee,
+    idempotencyFeeKey(reservation, transactionId),
+    feeMarkerTtlSec(reservation, transaction?.maxTime)
+  );
+}
+
+/**
+ * The response for a transaction found under an Idempotency-Key: a failure is
+ * reported as the first request would have.
+ */
+function idempotentResult(
+  final: { id: string; status: string; hash?: string | null; status_reason?: string | null },
+  network: 'testnet' | 'mainnet'
+): ChannelAccountsResponse {
+  if (final.status === 'failed') {
+    throw isNotSubmitted(final) ? notSubmittedError(final) : onchainFailedError(final, network);
+  }
+  return { transactionId: final.id, status: final.status, hash: final.hash ?? null };
 }
 
 async function channelAccounts(context: PluginContext): Promise<ChannelAccountsResponse> {
@@ -386,6 +546,10 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     };
   }
 
+  // Submissions only: validate the Idempotency-Key header before any work
+  const idempotencyKey = getIdempotencyKey(headers);
+  const scope = idempotencyKey ? idempotencyScope(headers, apiKey) : undefined;
+
   // 3. Resolve per-fund-relayer overrides and fetch fund relayer info in parallel
   const fundOverrides = parseFundRelayerOverrides(pluginConfig, fundRelayerId);
   const [fundInfo, fees] = await Promise.all([
@@ -439,22 +603,188 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   };
 
   // 6. Branch by request type
-  if (request.type === 'xdr') {
-    console.log(`[channels] Flow: XDR submit-only`);
-    return await handleXdrSubmit(request.xdr, ctx, request.skipWait);
+  const submit = (pipeline: PipelineContext): Promise<ChannelAccountsResponse> => {
+    if (request.type === 'xdr') {
+      console.log(`[channels] Flow: XDR submit-only`);
+      return handleXdrSubmit(request.xdr, pipeline, request.skipWait);
+    }
+
+    // Extract contractId for func+auth flow
+    const contractId = getContractIdFromFunc(request.func);
+    const funcAcquireOptions: AcquireOptions = { ...acquireOptions, contractId };
+
+    console.log(`[channels] Flow: func+auth with channel account`);
+    return handleFuncAuthSubmit(
+      request.func,
+      request.auth,
+      { ...pipeline, acquireOptions: funcAcquireOptions },
+      request.skipWait
+    );
+  };
+
+  if (!idempotencyKey) {
+    return await submit(ctx);
   }
 
-  // Extract contractId for func+auth flow
-  const contractId = getContractIdFromFunc(request.func);
-  const funcAcquireOptions: AcquireOptions = { ...acquireOptions, contractId };
-
-  console.log(`[channels] Flow: func+auth with channel account`);
-  return await handleFuncAuthSubmit(
-    request.func,
-    request.auth,
-    { ...ctx, acquireOptions: funcAcquireOptions },
-    request.skipWait
+  // 7. Idempotent submission: return the transaction an earlier request with
+  // this key created, resend the payload it stored if its reply was lost, or
+  // reserve the key and store the payload before sending.
+  // Until it sends, a reservation is in flight for at most the request budget;
+  // the record must outlive that and the send reply window
+  const reservationWindowMs =
+    effectiveConfig.globalTimeoutMs + effectiveConfig.maxTimeBoundOffsetSeconds * 1000 + POOL.CHANNEL_COOLDOWN_MS;
+  const sendWindowMs = IDEMPOTENCY.SEND_REPLY_WINDOW_MS;
+  const reserved = await reserveIdempotencyKey(
+    kv,
+    idempotencyRecordKey(config.network, scope!, idempotencyKey),
+    requestFingerprint(request, fundRelayerId),
+    {
+      reservationWindowMs,
+      sendWindowMs,
+      ttlSec: effectiveIdempotencyTtlSec(
+        config.idempotencyKeyTtlSeconds,
+        Math.ceil((reservationWindowMs + sendWindowMs) / 1000)
+      ),
+    }
   );
+
+  if (reserved.kind === 'existing') {
+    console.log(`[channels] Idempotency-Key matched transaction ${reserved.transactionId}`);
+    let existing: StellarTransactionResponse;
+    try {
+      existing = (await (fundRelayer as Relayer).getTransaction({
+        transactionId: reserved.transactionId,
+      })) as StellarTransactionResponse;
+    } catch (error) {
+      // Pruned by the Relayer after it became final: the outcome cannot be read
+      if (isTransactionNotFound(error)) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw outcomeUnknownError('gone', reason, { transactionId: reserved.transactionId, ...reserved.transaction });
+      }
+      throw error;
+    }
+    // The first request may have ended before charging (e.g. its wait failed)
+    await chargeIdempotentFeeOnce(
+      tracker,
+      reserved.reservation,
+      reserved.transactionId,
+      reserved.maxFee,
+      reserved.transaction,
+      existing
+    );
+    return idempotentResult(existing, config.network);
+  }
+
+  if (reserved.kind === 'unresolved') {
+    // The earlier send's reply was lost. Resend the identical payload under the
+    // same fund relayer key: the fund relayer returns the transaction it
+    // created, or creates it if it holds none. Nothing is rebuilt.
+    console.log(`[channels] Idempotency-Key has an unconfirmed send, resending the stored transaction`);
+    const stored = describeStoredTransaction(reserved.payload, networkPassphrase);
+    let submission;
+    try {
+      submission = await sendFeeBump(
+        fundRelayer as Relayer,
+        reserved.payload,
+        fundRelayerIdempotencyKey(reserved.reservation)
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const keyError = fundRelayerKeyError(reason, stored);
+      if (keyError) {
+        // The fund relayer answered: a repeat may resend right away
+        if (reason.includes(RELAYER_PAYLOAD_MISMATCH_MESSAGE)) await markSendRejected(kv, reserved.reservation);
+        throw keyError;
+      }
+      // An answered error does not show whether the original send created a
+      // transaction, so the key and payload are kept for the next repeat.
+      // Once the stored transaction has expired its outcome is final, so the
+      // caller is told how to check it instead of retrying forever.
+      if (isSendRejected(error)) {
+        await markSendRejected(kv, reserved.reservation);
+        if (hasStoredTransactionExpired(stored)) throw outcomeUnknownError('expired', reason, { ...stored });
+        throw sendFailedError(reason, stored);
+      }
+      throw error;
+    }
+    await recordIdempotentTransaction(kv, reserved.reservation, reserved.payload.max_fee, submission.id, stored);
+    // The fund relayer may return the transaction the original send created,
+    // in any state: report it as the existing-transaction path does, and charge
+    // it once it is final (a later repeat charges one still pending)
+    const final = { ...submission, status: submission.status ?? 'pending' };
+    await chargeIdempotentFeeOnce(
+      tracker,
+      reserved.reservation,
+      submission.id,
+      reserved.payload.max_fee,
+      stored,
+      final
+    );
+    return idempotentResult(final, config.network);
+  }
+
+  const { reservation } = reserved;
+  let sentPayload: FeeBumpPayload | undefined;
+  let sendRejected = false;
+  try {
+    const result = await submit({
+      ...ctx,
+      beforeSubmit: async (payload) => {
+        await storeIdempotentPayload(kv, reservation, payload);
+        sentPayload = payload;
+      },
+      onSubmitted: async (transactionId) => {
+        await recordIdempotentTransaction(
+          kv,
+          reservation,
+          sentPayload!.max_fee,
+          transactionId,
+          describeStoredTransaction(sentPayload!, networkPassphrase)
+        );
+      },
+      // The reply arrived, so a repeat need not wait out the send window. The
+      // key is kept: the error does not show that no transaction was stored,
+      // and only the identical stored payload is sent again
+      onSendRejected: async () => {
+        sendRejected = true;
+        await markSendRejected(kv, reservation);
+      },
+      fundRelayerIdempotencyKey: fundRelayerIdempotencyKey(reservation),
+      feeMarkerKey: (transactionId) => idempotencyFeeKey(reservation, transactionId),
+      feeMarkerTtlSec: () =>
+        feeMarkerTtlSec(reservation, sentPayload && describeStoredTransaction(sentPayload, networkPassphrase)?.maxTime),
+    });
+    // Read-only calls send nothing
+    if (!sentPayload) await releaseIdempotencyKey(kv, reservation);
+    return result;
+  } catch (error) {
+    // Once the payload is stored a transaction may exist, so the key is kept
+    if (!sentPayload) await releaseIdempotencyKey(kv, reservation);
+    if (sentPayload) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const stored = describeStoredTransaction(sentPayload, networkPassphrase);
+      // Another reservation of the key reached the fund relayer first
+      const keyError = fundRelayerKeyError(reason, stored);
+      if (keyError) throw keyError;
+      // Tell the caller to retry this key rather than start another
+      if (sendRejected) throw sendFailedError(reason, stored);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The plugin error for a send error about the fund relayer key itself, or
+ * undefined for any other error: the fund relayer is still creating the key's
+ * transaction, holds the key but no longer its transaction, or holds the key
+ * for a different payload.
+ */
+function fundRelayerKeyError(reason: string, stored: StoredTransaction | undefined) {
+  if (!reason.startsWith('Relayer error:')) return undefined;
+  if (reason.includes(RELAYER_IN_PROGRESS_MESSAGE)) return inProgressError();
+  if (reason.includes(RELAYER_TRANSACTION_GONE_MESSAGE)) return outcomeUnknownError('gone', reason, { ...stored });
+  if (reason.includes(RELAYER_PAYLOAD_MISMATCH_MESSAGE)) return keyConflictError(reason);
+  return undefined;
 }
 
 /**

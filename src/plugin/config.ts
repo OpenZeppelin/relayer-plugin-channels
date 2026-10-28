@@ -6,7 +6,7 @@
 
 import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE } from './constants';
+import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE, IDEMPOTENCY } from './constants';
 
 // Default inclusion fees (matching launchtube)
 const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + DYNAMIC_FEE.FEE_BUMP_MARGIN_DEFAULT; // 203
@@ -31,6 +31,8 @@ export interface ChannelAccountsConfig {
   maxTimeBoundOffsetSeconds: number;
   globalTimeoutMs: number;
   pollingTimeoutMs: number;
+  /** How long an Idempotency-Key keeps returning its transaction */
+  idempotencyKeyTtlSeconds: number;
 }
 
 function requireEnv(name: string): string {
@@ -58,6 +60,26 @@ function parseLockTtl(): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < CONFIG.MIN_LOCK_TTL_SECONDS || n > CONFIG.MAX_LOCK_TTL_SECONDS) {
     return CONFIG.DEFAULT_LOCK_TTL_SECONDS;
+  }
+  return Math.floor(n);
+}
+
+function parseIdempotencyKeyTtl(): number {
+  const raw = process.env.IDEMPOTENCY_KEY_TTL_SECONDS;
+  if (!raw) return IDEMPOTENCY.TTL_SECONDS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`[channels] Ignoring invalid IDEMPOTENCY_KEY_TTL_SECONDS=${raw}; using ${IDEMPOTENCY.TTL_SECONDS}`);
+    return IDEMPOTENCY.TTL_SECONDS;
+  }
+  // Raised to the minimum, not replaced by the default, so the plugin's TTL
+  // stays as close as it can to a Relayer configured with the same value: the
+  // Relayer's must be at least the plugin's (see idempotency.ts)
+  if (n < IDEMPOTENCY.MIN_TTL_SECONDS) {
+    console.warn(
+      `[channels] IDEMPOTENCY_KEY_TTL_SECONDS=${raw} is below the minimum; using ${IDEMPOTENCY.MIN_TTL_SECONDS}. Keep the Relayer's IDEMPOTENCY_KEY_TTL_SECONDS at least ${IDEMPOTENCY.MIN_TTL_SECONDS}`
+    );
+    return IDEMPOTENCY.MIN_TTL_SECONDS;
   }
   return Math.floor(n);
 }
@@ -202,6 +224,7 @@ export function loadConfig(): ChannelAccountsConfig {
     maxTimeBoundOffsetSeconds: parseMaxTimeBoundOffsetSeconds(),
     globalTimeoutMs: parseGlobalTimeoutMs(),
     pollingTimeoutMs: parsePollingTimeoutMs(),
+    idempotencyKeyTtlSeconds: parseIdempotencyKeyTtl(),
   };
 }
 

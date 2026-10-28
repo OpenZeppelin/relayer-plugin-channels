@@ -12,14 +12,136 @@ import {
   StellarTransactionResponse,
   PluginAPI,
 } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, TIMEOUT, POLLING } from './constants';
+import { HTTP_STATUS, IDEMPOTENCY, TIMEOUT, POLLING } from './constants';
 import type { ChannelAccountsConfig } from './config';
 import { ChannelAccountsResponse } from './types';
 import { FeeTracker } from './fee-tracking';
+import type { FeeBumpPayload } from './idempotency';
+
+/**
+ * `Relayer.sendTransaction` with its options argument. Relayer 1.9.0+ reads
+ * `idempotencyKey`; older Relayers ignore it.
+ * TODO: use the relayer-sdk's own `SendTransactionOptions` once a release
+ * exports it.
+ */
+type IdempotentRelayer = {
+  sendTransaction: (
+    payload: FeeBumpPayload,
+    options?: { idempotencyKey?: string }
+  ) => ReturnType<Relayer['sendTransaction']>;
+};
+
+/** Relayer error when another request holds the fund relayer key without a transaction yet. */
+export const RELAYER_IN_PROGRESS_MESSAGE = 'A request with this Idempotency-Key is already in progress';
+/** Relayer error when it holds the fund relayer key but no longer has its transaction. */
+export const RELAYER_TRANSACTION_GONE_MESSAGE = 'No transaction found for this Idempotency-Key';
+/** Relayer error when it holds the fund relayer key for a different payload; it created nothing for the send. */
+export const RELAYER_PAYLOAD_MISMATCH_MESSAGE = 'Idempotency-Key reused with a different request payload';
+
+/** Relayer error when it no longer has a transaction (pruned after it became final). */
+const RELAYER_TRANSACTION_NOT_FOUND = /Transaction with ID \S+ not found/;
+
+/**
+ * Tells whether a send failed with an error the fund relayer returned, as
+ * opposed to a lost reply (socket timeout, closed socket, unexpected failure),
+ * the Relayer's in-progress conflict, or a key whose transaction it no longer
+ * has. The plugin runtime reports relayer failures as `Relayer error: ...`
+ * with no status code.
+ *
+ * This never proves that no transaction exists: the Relayer checks the relayer
+ * (paused, disabled) and its storage before it looks up an idempotency key,
+ * and can fail after storing a transaction. It only tells that the reply
+ * arrived.
+ */
+export function isSendRejected(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.startsWith('Relayer error:') &&
+    !message.includes(RELAYER_IN_PROGRESS_MESSAGE) &&
+    !message.includes(RELAYER_TRANSACTION_GONE_MESSAGE)
+  );
+}
+
+/** Tells whether a getTransaction call failed because the Relayer no longer has the transaction. */
+export function isTransactionNotFound(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return RELAYER_TRANSACTION_NOT_FOUND.test(message);
+}
+
+/**
+ * Sends a fee bump payload to the fund relayer, with a fund relayer
+ * idempotency key when one is given. Relayer 1.9.0+ creates at most one
+ * transaction per key and returns it to a repeated send with the same payload.
+ */
+export function sendFeeBump(
+  fundRelayer: Relayer,
+  payload: FeeBumpPayload,
+  idempotencyKey?: string
+): ReturnType<Relayer['sendTransaction']> {
+  const relayer = fundRelayer as unknown as IdempotentRelayer;
+  return idempotencyKey ? relayer.sendTransaction(payload, { idempotencyKey }) : relayer.sendTransaction(payload);
+}
+
+/** Reason the Relayer gives a stored transaction it failed because it could not queue its jobs. */
+const RELAYER_QUEUE_UNAVAILABLE_REASON = 'Queue unavailable';
+
+/**
+ * Tells whether the Relayer failed a transaction before ever submitting it:
+ * it could not queue the transaction's jobs. A failed transaction without a
+ * hash is not enough, since the Relayer clears the hash when it resets a
+ * transaction after a bad sequence, possibly after an earlier submission.
+ */
+export function isNotSubmitted(final: { status: string; hash?: string | null; status_reason?: string | null }) {
+  return final.status === 'failed' && !final.hash && final.status_reason === RELAYER_QUEUE_UNAVAILABLE_REASON;
+}
+
+/**
+ * The error for a transaction the Relayer failed before submitting it (see
+ * isNotSubmitted). Nothing reached the network, so it is not an on-chain
+ * failure.
+ */
+export function notSubmittedError(final: { id: string; status_reason?: string | null }) {
+  return pluginError('The fund relayer failed the transaction before submitting it to the network', {
+    code: 'TRANSACTION_NOT_SUBMITTED',
+    status: HTTP_STATUS.BAD_GATEWAY,
+    details: { id: final.id, reason: final.status_reason ?? null },
+  });
+}
 
 export interface SubmitContext {
   contractId?: string;
   isLimited?: boolean;
+  /** Called with the exact payload before it is sent; a rejection stops the send */
+  beforeSubmit?: (payload: FeeBumpPayload) => Promise<void>;
+  /** Called once the fund relayer has created the transaction, before waiting */
+  onSubmitted?: (transactionId: string) => Promise<void>;
+  /** Fund relayer idempotency key for the send */
+  fundRelayerIdempotencyKey?: string;
+  /** Called when the fund relayer answered the send with an error (see isSendRejected) */
+  onSendRejected?: () => Promise<void>;
+  /** When set, the fee is recorded once per transaction, under the marker key for its id */
+  feeMarkerKey?: (transactionId: string) => string;
+  /** How long the fee marker is kept, read when the fee is recorded */
+  feeMarkerTtlSec?: () => number;
+}
+
+/** Records the fee against the API key's budget, once per marker key when one is set. */
+async function recordFee(
+  tracker: FeeTracker | undefined,
+  maxFee: number,
+  transactionId: string,
+  context?: SubmitContext
+): Promise<void> {
+  if (!tracker) return;
+  if (context?.feeMarkerKey) {
+    await tracker.recordUsageOnce(
+      maxFee,
+      context.feeMarkerKey(transactionId),
+      context.feeMarkerTtlSec?.() ?? IDEMPOTENCY.TTL_SECONDS
+    );
+    return;
+  }
+  await tracker.recordUsage(maxFee);
 }
 
 interface DecodedTransactionResult {
@@ -82,21 +204,27 @@ export async function submitWithFeeBumpAndWait(
 ): Promise<ChannelAccountsResponse> {
   // Submit with fee bump
   console.debug(`[channels] Sending fee bump tx: network=${network}, maxFee=${maxFee}, xdr_len=${signedXdr.length}`);
-  const payload = {
+  const payload: FeeBumpPayload = {
     network,
     transaction_xdr: signedXdr,
     fee_bump: true,
     max_fee: maxFee,
-  } as const;
+  };
   console.debug(`[channels] Relayer payload: ${JSON.stringify(payload)}`);
-  const submission = await fundRelayer.sendTransaction(payload);
+  await context?.beforeSubmit?.(payload);
+  let submission: Awaited<ReturnType<Relayer['sendTransaction']>>;
+  try {
+    submission = await sendFeeBump(fundRelayer, payload, context?.fundRelayerIdempotencyKey);
+  } catch (error) {
+    if (isSendRejected(error)) await context?.onSendRejected?.();
+    throw error;
+  }
+  await context?.onSubmitted?.(submission.id);
 
   // skipWait: return immediately after sendTransaction without waiting for confirmation
   if (skipWait) {
     console.debug(`[channels] skipWait enabled, returning pending result immediately`);
-    if (tracker) {
-      await tracker.recordUsage(maxFee);
-    }
+    await recordFee(tracker, maxFee, submission.id, context);
     return {
       transactionId: submission.id,
       status: 'pending',
@@ -132,13 +260,12 @@ export async function submitWithFeeBumpAndWait(
 
     // Check if transaction actually succeeded
     if (final.status === 'failed') {
+      // Never submitted: nothing failed on chain
+      if (isNotSubmitted(final)) throw notSubmittedError(final);
       // Record fee on on-chain failure (transaction was still submitted and consumed fees)
-      if (tracker) {
-        await tracker.recordUsage(maxFee);
-      }
+      await recordFee(tracker, maxFee, submission.id, context);
       const rawReason = final.status_reason || 'Transaction failed';
       const decoded = decodeTransactionResult(rawReason);
-      const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
       const contractType = context?.isLimited ? 'limited' : 'default';
       const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
       if (decoded && isTxInsufficientFeeError(decoded.resultCode)) {
@@ -152,26 +279,11 @@ export async function submitWithFeeBumpAndWait(
       } else {
         console.error(`${base}, reason=${rawReason}`);
       }
-      const reason = sanitizeReason(rawReason);
-      const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
-      throw pluginError(reasonWithLab, {
-        code: 'ONCHAIN_FAILED',
-        status: HTTP_STATUS.BAD_REQUEST,
-        details: {
-          status: String(final.status),
-          reason,
-          id: final.id,
-          hash: final.hash ?? null,
-          resultCode: decoded?.resultCode ?? null,
-          labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
-        },
-      });
+      throw onchainFailedError(final, network);
     }
 
     // Record fee on success
-    if (tracker) {
-      await tracker.recordUsage(maxFee);
-    }
+    await recordFee(tracker, maxFee, submission.id, context);
 
     return {
       transactionId: final.id,
@@ -179,8 +291,8 @@ export async function submitWithFeeBumpAndWait(
       hash: final.hash ?? null,
     };
   } catch (error: any) {
-    // If it's already a pluginError with ONCHAIN_FAILED, rethrow it
-    if (error.code === 'ONCHAIN_FAILED') {
+    // A known failure outcome is rethrown as is
+    if (error.code === 'ONCHAIN_FAILED' || error.code === 'TRANSACTION_NOT_SUBMITTED') {
       throw error;
     }
 
@@ -194,6 +306,33 @@ export async function submitWithFeeBumpAndWait(
       },
     });
   }
+}
+
+/**
+ * The error for a transaction that failed on chain, with the decoded result
+ * code and a Stellar Lab link.
+ */
+export function onchainFailedError(
+  final: { id: string; status: string; hash?: string | null; status_reason?: string | null },
+  network: 'testnet' | 'mainnet'
+) {
+  const rawReason = final.status_reason || 'Transaction failed';
+  const decoded = decodeTransactionResult(rawReason);
+  const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
+  const reason = sanitizeReason(rawReason);
+  const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
+  return pluginError(reasonWithLab, {
+    code: 'ONCHAIN_FAILED',
+    status: HTTP_STATUS.BAD_REQUEST,
+    details: {
+      status: String(final.status),
+      reason,
+      id: final.id,
+      hash: final.hash ?? null,
+      resultCode: decoded?.resultCode ?? null,
+      labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
+    },
+  });
 }
 
 /**
