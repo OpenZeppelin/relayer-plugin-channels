@@ -68,11 +68,18 @@ function parseIdempotencyKeyTtl(): number {
   const raw = process.env.IDEMPOTENCY_KEY_TTL_SECONDS;
   if (!raw) return IDEMPOTENCY.TTL_SECONDS;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < IDEMPOTENCY.MIN_TTL_SECONDS) {
-    console.warn(
-      `[channels] Ignoring IDEMPOTENCY_KEY_TTL_SECONDS=${raw}: must be at least ${IDEMPOTENCY.MIN_TTL_SECONDS}; using ${IDEMPOTENCY.TTL_SECONDS}`
-    );
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`[channels] Ignoring invalid IDEMPOTENCY_KEY_TTL_SECONDS=${raw}; using ${IDEMPOTENCY.TTL_SECONDS}`);
     return IDEMPOTENCY.TTL_SECONDS;
+  }
+  // Raised to the minimum, not replaced by the default, so the plugin's TTL
+  // stays as close as it can to a Relayer configured with the same value: the
+  // Relayer's must be at least the plugin's (see idempotency.ts)
+  if (n < IDEMPOTENCY.MIN_TTL_SECONDS) {
+    console.warn(
+      `[channels] IDEMPOTENCY_KEY_TTL_SECONDS=${raw} is below the minimum; using ${IDEMPOTENCY.MIN_TTL_SECONDS}. Keep the Relayer's IDEMPOTENCY_KEY_TTL_SECONDS at least ${IDEMPOTENCY.MIN_TTL_SECONDS}`
+    );
+    return IDEMPOTENCY.MIN_TTL_SECONDS;
   }
   return Math.floor(n);
 }

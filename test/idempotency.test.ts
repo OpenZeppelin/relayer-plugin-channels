@@ -24,6 +24,7 @@ import {
   storeIdempotentPayload,
   fundRelayerIdempotencyKey,
   idempotencyFeeKey,
+  feeMarkerTtlSec,
   effectiveIdempotencyTtlSec,
   describeStoredTransaction,
   idempotencyScope,
@@ -278,27 +279,99 @@ describe('reserveIdempotencyKey', () => {
     expect(await kv.get(recordKey)).toEqual({ fingerprint: 'fp', reservedAt: first.reservation.reservedAt + 1 });
   });
 
-  test('derives a stable fund relayer key from the reservation', async () => {
+  test('derives one fund relayer key for every reservation of a key', async () => {
     const first = await reserveIdempotencyKey(kv, recordKey, 'fp', OPTS);
     if (first.kind !== 'reserved') throw new Error('expected reservation');
-    expect(fundRelayerIdempotencyKey(first.reservation)).toBe(
-      `channels-idempotency:abc:${first.reservation.reservedAt}`
-    );
-    // A later reservation of the same key gets its own fund relayer key
-    expect(fundRelayerIdempotencyKey({ ...first.reservation, reservedAt: first.reservation.reservedAt + 1 })).not.toBe(
+    expect(fundRelayerIdempotencyKey(first.reservation)).toBe('channels-idempotency:abc');
+    // Every reservation of the key shares it, so the fund relayer rejects a rebuilt transaction
+    expect(fundRelayerIdempotencyKey({ ...first.reservation, reservedAt: first.reservation.reservedAt + 1 })).toBe(
       fundRelayerIdempotencyKey(first.reservation)
     );
   });
 
-  test('derives the fee marker key from the reservation', async () => {
+  test('derives the fee marker key from the transaction, not the reservation', async () => {
     const first = await reserveIdempotencyKey(kv, recordKey, 'fp', OPTS);
     if (first.kind !== 'reserved') throw new Error('expected reservation');
-    expect(idempotencyFeeKey(first.reservation)).toBe(`${recordKey}:${first.reservation.reservedAt}:fee`);
+    expect(idempotencyFeeKey(first.reservation, 'tx-1')).toBe(`${recordKey}:tx-1:fee`);
+    // Another reservation of the key that gets the same transaction shares the marker
+    expect(idempotencyFeeKey({ ...first.reservation, reservedAt: first.reservation.reservedAt + 1 }, 'tx-1')).toBe(
+      idempotencyFeeKey(first.reservation, 'tx-1')
+    );
+  });
+
+  test('feeMarkerTtlSec covers any record that can hold the transaction', () => {
+    // Record from 0 to 671s; the transaction is valid until 600s, so a later
+    // reservation can start by 600s and last until 1271s
+    const reservation = { reservedAt: 0, expiresAt: 671_000 };
+    expect(feeMarkerTtlSec(reservation, 600, 0)).toBe(1271 + 300);
+    // Never shorter than this reservation's own record
+    const late = { reservedAt: 1_000_000, expiresAt: 1_671_000 };
+    expect(feeMarkerTtlSec(late, 10, 1_000_000)).toBe(671 + 300);
+    expect(feeMarkerTtlSec(late, undefined, 1_000_000)).toBe(671 + 300);
   });
 
   test('effectiveIdempotencyTtlSec raises a TTL below the transaction lifetime', () => {
     expect(effectiveIdempotencyTtlSec(3600, 131)).toBe(3600);
     expect(effectiveIdempotencyTtlSec(300, 671)).toBe(671);
+  });
+
+  describe('lease check', () => {
+    /** Makes every clock reading after the first one land past the write budget, as after a stall. */
+    function stallAfterLockRequest() {
+      let calls = 0;
+      vi.spyOn(performance, 'now').mockImplementation(() => (calls++ === 0 ? 0 : 3_000));
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    test('a reservation stalled past the budget writes nothing and gets 409', async () => {
+      stallAfterLockRequest();
+      await expect(reserveIdempotencyKey(kv, recordKey, 'fp', OPTS)).rejects.toMatchObject({
+        code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
+        status: 409,
+      });
+      expect(await kv.get(recordKey)).toBeNull();
+    });
+
+    test('the clock starts before the lock is requested, so a late lock grant counts', async () => {
+      let calls = 0;
+      vi.spyOn(performance, 'now').mockImplementation(() => (calls++ === 0 ? 0 : 3_000));
+      const withLock = kv.withLock.bind(kv);
+      // The clock was read once before withLock was called
+      vi.spyOn(kv, 'withLock').mockImplementation((key, fn, opts) => {
+        expect(calls).toBe(1);
+        return withLock(key, fn, opts);
+      });
+      await expect(reserveIdempotencyKey(kv, recordKey, 'fp', OPTS)).rejects.toMatchObject({ status: 409 });
+    });
+
+    test('a payload store stalled past the budget writes nothing, so nothing is sent', async () => {
+      const first = await reserveIdempotencyKey(kv, recordKey, 'fp', OPTS);
+      if (first.kind !== 'reserved') throw new Error('expected reservation');
+      stallAfterLockRequest();
+      await expect(storeIdempotentPayload(kv, first.reservation, PAYLOAD)).rejects.toMatchObject({ status: 409 });
+      expect(await kv.get(recordKey)).not.toHaveProperty('payload');
+    });
+
+    test('a release stalled past the budget deletes nothing', async () => {
+      const first = await reserveIdempotencyKey(kv, recordKey, 'fp', OPTS);
+      if (first.kind !== 'reserved') throw new Error('expected reservation');
+      stallAfterLockRequest();
+      await releaseIdempotencyKey(kv, first.reservation);
+      expect(await kv.get(recordKey)).toMatchObject({ reservedAt: first.reservation.reservedAt });
+    });
+
+    test('a transaction id write stalled past the budget is skipped; the payload stays for a resend', async () => {
+      const first = await reserveIdempotencyKey(kv, recordKey, 'fp', OPTS);
+      if (first.kind !== 'reserved') throw new Error('expected reservation');
+      await storeIdempotentPayload(kv, first.reservation, PAYLOAD);
+      stallAfterLockRequest();
+      await recordIdempotentTransaction(kv, first.reservation, 1000, 'tx-1');
+      expect(await kv.get(recordKey)).toMatchObject({ payload: PAYLOAD });
+      expect(await kv.get(recordKey)).not.toHaveProperty('transactionId');
+    });
   });
 
   test('a released key can be reserved again', async () => {

@@ -35,6 +35,8 @@ type IdempotentRelayer = {
 export const RELAYER_IN_PROGRESS_MESSAGE = 'A request with this Idempotency-Key is already in progress';
 /** Relayer error when it holds the fund relayer key but no longer has its transaction. */
 export const RELAYER_TRANSACTION_GONE_MESSAGE = 'No transaction found for this Idempotency-Key';
+/** Relayer error when it holds the fund relayer key for a different payload; it created nothing for the send. */
+export const RELAYER_PAYLOAD_MISMATCH_MESSAGE = 'Idempotency-Key reused with a different request payload';
 
 /** Relayer error when it no longer has a transaction (pruned after it became final). */
 const RELAYER_TRANSACTION_NOT_FOUND = /Transaction with ID \S+ not found/;
@@ -117,17 +119,26 @@ export interface SubmitContext {
   fundRelayerIdempotencyKey?: string;
   /** Called when the fund relayer answered the send with an error (see isSendRejected) */
   onSendRejected?: () => Promise<void>;
-  /** When set, the fee is recorded once per transaction under this marker key */
-  feeMarkerKey?: string;
-  /** How long the fee marker is kept */
-  feeMarkerTtlSec?: number;
+  /** When set, the fee is recorded once per transaction, under the marker key for its id */
+  feeMarkerKey?: (transactionId: string) => string;
+  /** How long the fee marker is kept, read when the fee is recorded */
+  feeMarkerTtlSec?: () => number;
 }
 
 /** Records the fee against the API key's budget, once per marker key when one is set. */
-async function recordFee(tracker: FeeTracker | undefined, maxFee: number, context?: SubmitContext): Promise<void> {
+async function recordFee(
+  tracker: FeeTracker | undefined,
+  maxFee: number,
+  transactionId: string,
+  context?: SubmitContext
+): Promise<void> {
   if (!tracker) return;
   if (context?.feeMarkerKey) {
-    await tracker.recordUsageOnce(maxFee, context.feeMarkerKey, context.feeMarkerTtlSec ?? IDEMPOTENCY.TTL_SECONDS);
+    await tracker.recordUsageOnce(
+      maxFee,
+      context.feeMarkerKey(transactionId),
+      context.feeMarkerTtlSec?.() ?? IDEMPOTENCY.TTL_SECONDS
+    );
     return;
   }
   await tracker.recordUsage(maxFee);
@@ -213,7 +224,7 @@ export async function submitWithFeeBumpAndWait(
   // skipWait: return immediately after sendTransaction without waiting for confirmation
   if (skipWait) {
     console.debug(`[channels] skipWait enabled, returning pending result immediately`);
-    await recordFee(tracker, maxFee, context);
+    await recordFee(tracker, maxFee, submission.id, context);
     return {
       transactionId: submission.id,
       status: 'pending',
@@ -252,7 +263,7 @@ export async function submitWithFeeBumpAndWait(
       // Never submitted: nothing failed on chain
       if (isNotSubmitted(final)) throw notSubmittedError(final);
       // Record fee on on-chain failure (transaction was still submitted and consumed fees)
-      await recordFee(tracker, maxFee, context);
+      await recordFee(tracker, maxFee, submission.id, context);
       const rawReason = final.status_reason || 'Transaction failed';
       const decoded = decodeTransactionResult(rawReason);
       const contractType = context?.isLimited ? 'limited' : 'default';
@@ -272,7 +283,7 @@ export async function submitWithFeeBumpAndWait(
     }
 
     // Record fee on success
-    await recordFee(tracker, maxFee, context);
+    await recordFee(tracker, maxFee, submission.id, context);
 
     return {
       transactionId: final.id,

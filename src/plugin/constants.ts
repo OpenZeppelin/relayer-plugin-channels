@@ -85,6 +85,11 @@ export const IDEMPOTENCY = {
   MIN_TTL_SECONDS: 300,
   /** Lock held only while reading or updating a key's record */
   LOCK_TTL_SECONDS: 5,
+  /**
+   * How long after requesting a record's lock a write may still start. Well
+   * under LOCK_TTL_SECONDS, so the write lands before the lock can expire
+   */
+  LOCK_WRITE_BUDGET_MS: 2_000,
   /** Attempts to take a record's lock before giving up */
   RECORD_LOCK_ATTEMPTS: 10,
   /** The plugin runtime's socket timeout (30s) plus margin: a send's reply can arrive this long after it started */

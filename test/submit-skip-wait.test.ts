@@ -312,11 +312,11 @@ describe('submitWithFeeBumpAndWait fee marker', () => {
       api,
       Date.now(),
       tracker as any,
-      { feeMarkerKey: 'testnet:idempotency:abc:fee' },
+      { feeMarkerKey: (id: string) => `testnet:idempotency:abc:${id}:fee` },
       true
     );
 
-    expect(tracker.recordUsageOnce).toHaveBeenCalledWith(1000, 'testnet:idempotency:abc:fee', 3_600);
+    expect(tracker.recordUsageOnce).toHaveBeenCalledWith(1000, `testnet:idempotency:abc:tx-1:fee`, 3_600);
     expect(tracker.recordUsage).not.toHaveBeenCalled();
   });
 

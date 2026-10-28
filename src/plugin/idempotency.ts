@@ -12,11 +12,25 @@
  * - when the id is missing (the reply was lost or the id write failed),
  *   resends the identical stored payload instead of building a new one.
  *
- * Every send for a reservation carries the same fund relayer idempotency key
- * and the same payload. Relayer 1.9.0+ creates at most one transaction per key
- * and returns that transaction, in any state, to a repeated send; it keeps the
- * key when a create fails after the transaction was stored. So a resend
- * recovers a transaction whose reply was lost, and resending is always safe.
+ * Every send under a key, from any reservation of it, carries the same fund
+ * relayer idempotency key. Relayer 1.9.0+ reserves that key atomically,
+ * creates at most one transaction per key, returns that transaction, in any
+ * state, to a repeated send of the same payload, and rejects a different
+ * payload; it keeps the key when a create fails after the transaction was
+ * stored. So a resend recovers a transaction whose reply was lost, and
+ * resending is always safe.
+ *
+ * The fund relayer key is also what stops a key from executing twice. The
+ * record here is guarded by a lock with a TTL and the KV store has no
+ * conditional writes, so a request stalled past the lock's TTL can still
+ * overwrite or delete newer state (the lease check below narrows this, it does
+ * not close it). Whatever happens to the record, a rebuilt transaction sent
+ * under the key is rejected by the fund relayer while it holds the key. The
+ * fund relayer keeps a key for its IDEMPOTENCY_KEY_TTL_SECONDS from the first
+ * send, which comes after the reservation, so with that TTL at least this
+ * plugin's, no transaction executes twice within the plugin's TTL of the
+ * reservation. A key reused after the plugin's record expired, while the fund
+ * relayer still holds it, gets IDEMPOTENCY_KEY_CONFLICT.
  * A send error never shows that no transaction exists (the Relayer can fail
  * before it looks the key up, or after storing), so once a payload is stored
  * the key is kept and only that payload is ever sent again. Older Relayers
@@ -170,6 +184,33 @@ export function idempotencyRecordKey(network: string, scope: string, key: string
 }
 
 /**
+ * Runs fn under the record's lock (null when the lock is busy). fn calls
+ * checkLease right before each write: it throws once the lock may have
+ * expired, so a request stalled while holding the lock does not write what it
+ * read before the stall over newer state. Time is measured on a monotonic
+ * clock from before the lock is requested, since the lock's TTL starts when
+ * the KV store takes it and withLock can return late. A stall between the
+ * check and the write landing is not caught (see the file comment).
+ */
+async function withRecordLease<T>(
+  kv: PluginKVStore,
+  recordKey: string,
+  fn: (checkLease: () => void) => Promise<T>
+): Promise<T | null> {
+  const start = performance.now();
+  const checkLease = () => {
+    if (performance.now() - start > IDEMPOTENCY.LOCK_WRITE_BUDGET_MS) {
+      console.warn('[channels] Idempotency-Key record lock may have expired; not writing');
+      throw inProgressError();
+    }
+  };
+  return kv.withLock(`${recordKey}:lock`, () => fn(checkLease), {
+    ttlSec: IDEMPOTENCY.LOCK_TTL_SECONDS,
+    onBusy: 'skip',
+  });
+}
+
+/**
  * Reserves the key for this request, or returns what an earlier request with
  * the same key left: its transaction id, or the payload it sent without a
  * recorded reply (to be resent as is).
@@ -190,57 +231,55 @@ export async function reserveIdempotencyKey(
   options: ReserveOptions
 ): Promise<ReserveResult> {
   const { reservationWindowMs, sendWindowMs, ttlSec } = options;
-  const result = await kv.withLock(
-    `${recordKey}:lock`,
-    async (): Promise<ReserveResult> => {
-      const now = Date.now();
-      const existing = await kv.get<IdempotencyRecord>(recordKey);
+  const result = await withRecordLease(kv, recordKey, async (checkLease): Promise<ReserveResult> => {
+    const now = Date.now();
+    const existing = await kv.get<IdempotencyRecord>(recordKey);
 
-      if (existing) {
-        if (existing.fingerprint !== fingerprint) {
-          throw pluginError('Idempotency-Key reused with a different request payload', {
-            code: 'IDEMPOTENCY_KEY_REUSED',
-            status: HTTP_STATUS.UNPROCESSABLE_ENTITY,
-          });
-        }
-        const reservation = {
-          recordKey,
-          fingerprint,
-          reservedAt: existing.reservedAt,
-          expiresAt: existing.expiresAt ?? existing.reservedAt + ttlSec * 1000,
-        };
-        if (existing.transactionId) {
-          return {
-            kind: 'existing',
-            reservation,
-            transactionId: existing.transactionId,
-            maxFee: existing.maxFee ?? existing.payload?.max_fee,
-            transaction: existing.transaction,
-          };
-        }
-        if (existing.payload) {
-          if (now - (existing.sentAt ?? 0) < sendWindowMs) throw inProgressError();
-          // Re-arm the send window so concurrent repeats do not all resend
-          await kv.set(recordKey, { ...existing, sentAt: now } satisfies IdempotencyRecord, {
-            ttlSec: recordTtlSec(reservation, now),
-          });
-          return { kind: 'unresolved', reservation, payload: existing.payload };
-        }
-        if (now - existing.reservedAt < reservationWindowMs) {
-          throw inProgressError();
-        }
-        console.warn('[channels] Taking over an Idempotency-Key reservation that was never sent');
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw pluginError('Idempotency-Key reused with a different request payload', {
+          code: 'IDEMPOTENCY_KEY_REUSED',
+          status: HTTP_STATUS.UNPROCESSABLE_ENTITY,
+        });
       }
-
-      const record: IdempotencyRecord = { fingerprint, reservedAt: now, expiresAt: now + ttlSec * 1000 };
-      await kv.set(recordKey, record, { ttlSec });
-      return {
-        kind: 'reserved',
-        reservation: { recordKey, fingerprint, reservedAt: now, expiresAt: record.expiresAt },
+      const reservation = {
+        recordKey,
+        fingerprint,
+        reservedAt: existing.reservedAt,
+        expiresAt: existing.expiresAt ?? existing.reservedAt + ttlSec * 1000,
       };
-    },
-    { ttlSec: IDEMPOTENCY.LOCK_TTL_SECONDS, onBusy: 'skip' }
-  );
+      if (existing.transactionId) {
+        return {
+          kind: 'existing',
+          reservation,
+          transactionId: existing.transactionId,
+          maxFee: existing.maxFee ?? existing.payload?.max_fee,
+          transaction: existing.transaction,
+        };
+      }
+      if (existing.payload) {
+        if (now - (existing.sentAt ?? 0) < sendWindowMs) throw inProgressError();
+        // Re-arm the send window so concurrent repeats do not all resend
+        checkLease();
+        await kv.set(recordKey, { ...existing, sentAt: now } satisfies IdempotencyRecord, {
+          ttlSec: recordTtlSec(reservation, now),
+        });
+        return { kind: 'unresolved', reservation, payload: existing.payload };
+      }
+      if (now - existing.reservedAt < reservationWindowMs) {
+        throw inProgressError();
+      }
+      console.warn('[channels] Taking over an Idempotency-Key reservation that was never sent');
+    }
+
+    const record: IdempotencyRecord = { fingerprint, reservedAt: now, expiresAt: now + ttlSec * 1000 };
+    checkLease();
+    await kv.set(recordKey, record, { ttlSec });
+    return {
+      kind: 'reserved',
+      reservation: { recordKey, fingerprint, reservedAt: now, expiresAt: record.expiresAt },
+    };
+  });
 
   // Another request is reserving the same key right now
   if (result === null) throw inProgressError();
@@ -254,14 +293,12 @@ export async function reserveIdempotencyKey(
 async function withRecordLock<T>(
   kv: PluginKVStore,
   reservation: IdempotencyReservation,
-  fn: (record: IdempotencyRecord | null) => Promise<T>
+  fn: (record: IdempotencyRecord | null, checkLease: () => void) => Promise<T>
 ): Promise<T | null> {
   for (let attempt = 0; attempt < IDEMPOTENCY.RECORD_LOCK_ATTEMPTS; attempt++) {
-    const result = await kv.withLock(
-      `${reservation.recordKey}:lock`,
-      async () => ({ value: await fn(await kv.get<IdempotencyRecord>(reservation.recordKey)) }),
-      { ttlSec: IDEMPOTENCY.LOCK_TTL_SECONDS, onBusy: 'skip' }
-    );
+    const result = await withRecordLease(kv, reservation.recordKey, async (checkLease) => ({
+      value: await fn(await kv.get<IdempotencyRecord>(reservation.recordKey), checkLease),
+    }));
     if (result !== null) return result.value;
     await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40));
   }
@@ -289,7 +326,7 @@ export async function storeIdempotentPayload(
   reservation: IdempotencyReservation,
   payload: FeeBumpPayload
 ): Promise<void> {
-  const stored = await withRecordLock(kv, reservation, async (record) => {
+  const stored = await withRecordLock(kv, reservation, async (record, checkLease) => {
     if (!isOwnUnsentRecord(record, reservation)) return false;
     const next: IdempotencyRecord = {
       fingerprint: reservation.fingerprint,
@@ -298,6 +335,7 @@ export async function storeIdempotentPayload(
       payload,
       sentAt: Date.now(),
     };
+    checkLease();
     await kv.set(reservation.recordKey, next, { ttlSec: recordTtlSec(reservation) });
     return true;
   });
@@ -318,7 +356,7 @@ export async function recordIdempotentTransaction(
   transaction?: StoredTransaction
 ): Promise<void> {
   try {
-    const written = await withRecordLock(kv, reservation, async (record) => {
+    const written = await withRecordLock(kv, reservation, async (record, checkLease) => {
       if (record?.transactionId) return true;
       if (record && record.reservedAt !== reservation.reservedAt) {
         console.warn('[channels] Idempotency-Key was reserved again; transaction not recorded over it');
@@ -332,6 +370,7 @@ export async function recordIdempotentTransaction(
         transactionId,
         transaction,
       };
+      checkLease();
       await kv.set(reservation.recordKey, next, { ttlSec: recordTtlSec(reservation) });
       return true;
     });
@@ -342,34 +381,54 @@ export async function recordIdempotentTransaction(
 }
 
 /**
- * KV key marking that the transaction sent under a reserved key has been
- * charged against the API key's fee budget (see FeeTracker.recordUsageOnce).
- * It must outlive the record (see feeMarkerTtlSec), or a later repeat of the
- * same transaction would be charged again.
+ * KV key marking that a transaction sent under a key has been charged against
+ * the API key's fee budget (see FeeTracker.recordUsageOnce). It must outlive
+ * the record (see feeMarkerTtlSec), or a later repeat of the same transaction
+ * would be charged again.
  */
-export function idempotencyFeeKey(reservation: IdempotencyReservation): string {
-  // Per reservation: a marker can outlive its record, and a later reservation
-  // of the same key is a new transaction that must be charged
-  return `${reservation.recordKey}:${reservation.reservedAt}:fee`;
+export function idempotencyFeeKey(
+  reservation: Pick<IdempotencyReservation, 'recordKey'>,
+  transactionId: string
+): string {
+  // Per transaction, not per reservation: every reservation of the key shares
+  // the fund relayer key, so two of them can get the same transaction back
+  // (a stale reservation write, see the file comment) and must charge it once.
+  // A later transaction under the key has its own id and is charged.
+  return `${reservation.recordKey}:${transactionId}:fee`;
 }
 
 /**
- * TTL for a reservation's fee marker: past the record's fixed expiry, so no
- * repeat of the transaction can find the record without its marker.
+ * TTL for a transaction's fee marker: past the expiry of every record that can
+ * hold the transaction, so no repeat can find it in a record without its marker.
+ *
+ * The marker is shared by every reservation that gets the transaction back,
+ * and the first one to charge sets its TTL. A later reservation gets it back
+ * only by sending its identical signed payload, which validation accepts only
+ * until its maxTime (a rebuilt transaction is a different one), so every such
+ * reservation starts by maxTime and its record expires by maxTime plus the
+ * record TTL. Without a maxTime only this reservation's record is covered.
  */
-export function feeMarkerTtlSec(reservation: Pick<IdempotencyReservation, 'expiresAt'>, now = Date.now()): number {
-  return recordTtlSec(reservation, now) + IDEMPOTENCY.FEE_MARKER_MARGIN_SECONDS;
+export function feeMarkerTtlSec(
+  reservation: Pick<IdempotencyReservation, 'reservedAt' | 'expiresAt'>,
+  maxTime?: number,
+  now = Date.now()
+): number {
+  const recordTtlMs = reservation.expiresAt - reservation.reservedAt;
+  const lastExpiry = Math.max(reservation.expiresAt, maxTime !== undefined ? maxTime * 1000 + recordTtlMs : 0);
+  return recordTtlSec({ expiresAt: lastExpiry }, now) + IDEMPOTENCY.FEE_MARKER_MARGIN_SECONDS;
 }
 
 /**
- * Fund relayer idempotency key for a reservation, so resending its stored
- * payload returns the transaction the fund relayer already created. It
- * includes reservedAt: a later reservation of the same key builds a new
- * transaction and must not share the fund relayer key of an earlier one.
+ * Fund relayer idempotency key for a key's record, so resending its stored
+ * payload returns the transaction the fund relayer already created. It is the
+ * same for every reservation of the key: the fund relayer then rejects a
+ * transaction rebuilt under the key while it holds the key, even if the
+ * record here was overwritten or deleted (see the file comment). A takeover
+ * shares it safely, since the reservation it takes over never sent.
  */
-export function fundRelayerIdempotencyKey(reservation: IdempotencyReservation): string {
+export function fundRelayerIdempotencyKey(reservation: Pick<IdempotencyReservation, 'recordKey'>): string {
   const digest = reservation.recordKey.slice(reservation.recordKey.lastIndexOf(':') + 1);
-  return `channels-idempotency:${digest}:${reservation.reservedAt}`;
+  return `channels-idempotency:${digest}`;
 }
 
 /**
@@ -378,8 +437,9 @@ export function fundRelayerIdempotencyKey(reservation: IdempotencyReservation): 
  */
 export async function markSendRejected(kv: PluginKVStore, reservation: IdempotencyReservation): Promise<void> {
   try {
-    await withRecordLock(kv, reservation, async (record) => {
+    await withRecordLock(kv, reservation, async (record, checkLease) => {
       if (record?.reservedAt !== reservation.reservedAt || !record.payload || record.transactionId) return;
+      checkLease();
       await kv.set(reservation.recordKey, { ...record, sentAt: 0 } satisfies IdempotencyRecord, {
         ttlSec: recordTtlSec(reservation),
       });
@@ -402,7 +462,7 @@ export function effectiveIdempotencyTtlSec(configuredSeconds: number, minSeconds
   if (!ttlRaisedWarned) {
     ttlRaisedWarned = true;
     console.warn(
-      `[channels] IDEMPOTENCY_KEY_TTL_SECONDS (${configuredSeconds}s) is below the transaction lifetime; using ${minSeconds}s`
+      `[channels] IDEMPOTENCY_KEY_TTL_SECONDS (${configuredSeconds}s) is below the transaction lifetime; using ${minSeconds}s. Keep the Relayer's IDEMPOTENCY_KEY_TTL_SECONDS at least ${minSeconds}s`
     );
   }
   return minSeconds;
@@ -488,6 +548,29 @@ export function sendFailedError(reason: string, transaction: StoredTransaction |
 }
 
 /**
+ * The error for a send the fund relayer rejected because it holds the fund
+ * relayer key for a different payload: an earlier request with this key sent
+ * another transaction, and the key was reused after this plugin's record
+ * expired, or the record was overwritten. The fund relayer created nothing for
+ * this send. The key cannot be used until the fund relayer's key expires.
+ *
+ * It carries no transaction details: the only transaction the plugin knows here
+ * is the refused one, and a lookup of it finds nothing, which says nothing
+ * about the earlier transaction. The Relayer does not return the earlier one,
+ * and the plugin's record of it is gone.
+ */
+export function keyConflictError(reason: string) {
+  return pluginError(
+    'The fund relayer holds this Idempotency-Key for a different transaction, sent by an earlier request with this key, so it did not create this one. The key cannot be used again until the fund relayer releases it (its IDEMPOTENCY_KEY_TTL_SECONDS after the earlier send). This error does not identify the earlier transaction, which may have executed: a new key can execute the request a second time, so confirm from your own records or the on-chain state the request changes whether it executed before using one.',
+    {
+      code: 'IDEMPOTENCY_KEY_CONFLICT',
+      status: HTTP_STATUS.UNPROCESSABLE_ENTITY,
+      details: { reason },
+    }
+  );
+}
+
+/**
  * The caller identity a key is scoped to: the API key, or else the
  * Authorization header. A key sent with neither is rejected, since all such
  * callers would share one namespace and could claim or read each other's keys.
@@ -510,8 +593,9 @@ export function idempotencyScope(headers: Record<string, string[]> | undefined, 
  */
 export async function releaseIdempotencyKey(kv: PluginKVStore, reservation: IdempotencyReservation): Promise<void> {
   try {
-    await withRecordLock(kv, reservation, async (record) => {
+    await withRecordLock(kv, reservation, async (record, checkLease) => {
       if (isOwnUnsentRecord(record, reservation)) {
+        checkLease();
         await kv.del(reservation.recordKey);
       }
     });

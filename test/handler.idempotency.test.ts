@@ -75,6 +75,7 @@ vi.mock('../src/plugin/submit', async (importOriginal) => ({
   isNotSubmitted: ((await importOriginal()) as any).isNotSubmitted,
   RELAYER_IN_PROGRESS_MESSAGE: ((await importOriginal()) as any).RELAYER_IN_PROGRESS_MESSAGE,
   RELAYER_TRANSACTION_GONE_MESSAGE: ((await importOriginal()) as any).RELAYER_TRANSACTION_GONE_MESSAGE,
+  RELAYER_PAYLOAD_MISMATCH_MESSAGE: ((await importOriginal()) as any).RELAYER_PAYLOAD_MISMATCH_MESSAGE,
   signWithChannelAndFund: vi.fn(),
   submitWithFeeBumpAndWait: vi.fn().mockResolvedValue({
     transactionId: 'tx-abc',
@@ -288,7 +289,8 @@ describe('idempotent submission', () => {
       await submitContext?.onSubmitted?.(transactionId);
       // Fee recording, as in the real submit
       if (tracker) {
-        if (submitContext?.feeMarkerKey) await tracker.recordUsageOnce(maxFee, submitContext.feeMarkerKey);
+        if (submitContext?.feeMarkerKey)
+          await tracker.recordUsageOnce(maxFee, submitContext.feeMarkerKey(transactionId));
         else await tracker.recordUsage(maxFee);
       }
       return { transactionId, status: 'confirmed', hash: `hash-${transactionId}` };
@@ -367,7 +369,7 @@ describe('idempotent submission', () => {
     // Not rebuilt: the stored payload is resent with the fund relayer key
     expect(submitWithFeeBumpAndWait).toHaveBeenCalledTimes(1);
     expect(fundRelayer.sendTransaction).toHaveBeenCalledWith(PAYLOAD, {
-      idempotencyKey: expect.stringMatching(/^channels-idempotency:[0-9a-f]{64}:\d+$/),
+      idempotencyKey: expect.stringMatching(/^channels-idempotency:[0-9a-f]{64}$/),
     });
     expect(repeat).toEqual({ transactionId: 'tx-1', status: 'pending', hash: null });
 
@@ -402,7 +404,7 @@ describe('idempotent submission', () => {
     await handler(makeContext(KEY));
 
     const submitContext = (submitWithFeeBumpAndWait as any).mock.calls[0][7];
-    expect(submitContext.fundRelayerIdempotencyKey).toMatch(/^channels-idempotency:[0-9a-f]{64}:\d+$/);
+    expect(submitContext.fundRelayerIdempotencyKey).toMatch(/^channels-idempotency:[0-9a-f]{64}$/);
   });
 
   describe('channel lock on the func+auth path', () => {
@@ -637,7 +639,7 @@ describe('idempotent submission', () => {
         const [, , , maxFee, , , tracker, submitContext] = args;
         await submitContext.beforeSubmit(PAYLOAD);
         await submitContext.onSubmitted('tx-1');
-        await tracker.recordUsageOnce(maxFee, submitContext.feeMarkerKey, submitContext.feeMarkerTtlSec);
+        await tracker.recordUsageOnce(maxFee, submitContext.feeMarkerKey('tx-1'), submitContext.feeMarkerTtlSec());
         return { transactionId: 'tx-1', status: 'confirmed', hash: 'hash-tx-1' };
       });
       const set = kv.set.bind(kv);
@@ -874,7 +876,7 @@ describe('idempotent submission', () => {
       fundRelayer.sendTransaction = vi.fn().mockResolvedValue({ id: 'tx-1', status: 'pending', hash: null });
       expect(await handler(repeat)).toEqual({ transactionId: 'tx-1', status: 'pending', hash: null });
       expect(fundRelayer.sendTransaction).toHaveBeenCalledWith(PAYLOAD, {
-        idempotencyKey: expect.stringMatching(/^channels-idempotency:[0-9a-f]{64}:\d+$/),
+        idempotencyKey: expect.stringMatching(/^channels-idempotency:[0-9a-f]{64}$/),
       });
       expect(submitWithFeeBumpAndWait).toHaveBeenCalledTimes(1);
     });
@@ -1080,6 +1082,301 @@ describe('idempotent submission', () => {
 
       expect(poolSpies.extendLock).not.toHaveBeenCalled();
       expect(poolSpies.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('fund relayer key fence', () => {
+    const RELAYER_TTL_MS = 86_400_000;
+    const PLUGIN_TTL_MS = 3_600_000;
+
+    /**
+     * A fund relayer with Relayer 1.9 idempotency: an atomic key reservation
+     * kept for its TTL from the first send, a replay for the same body, and
+     * 422 for a different one. Counts the transactions it creates.
+     */
+    function idempotentFundRelayer() {
+      const keys = new Map<string, { body: string; id: string; expiresAt: number }>();
+      const created: string[] = [];
+      const sendTransaction = vi.fn(async (payload: any, options?: { idempotencyKey?: string }) => {
+        const key = options?.idempotencyKey;
+        const body = JSON.stringify(payload);
+        const held = key ? keys.get(key) : undefined;
+        if (held && held.expiresAt > Date.now()) {
+          if (held.body !== body) {
+            throw new Error('Relayer error: Idempotency-Key reused with a different request payload');
+          }
+          return { id: held.id, status: 'pending', hash: null };
+        }
+        const id = `tx-${created.length + 1}`;
+        created.push(id);
+        if (key) keys.set(key, { body, id, expiresAt: Date.now() + RELAYER_TTL_MS });
+        return { id, status: 'pending', hash: null };
+      });
+      return { sendTransaction, created };
+    }
+
+    /** Runs the real submit, without waiting, so every send reaches the fake fund relayer. */
+    async function useRealSubmit() {
+      const actual = await vi.importActual<typeof import('../src/plugin/submit')>('../src/plugin/submit');
+      (submitWithFeeBumpAndWait as any).mockImplementation(actual.submitWithFeeBumpAndWait);
+    }
+
+    /** Each build gets a new body, as a rebuilt transaction does (new channel or sequence). */
+    function eachBuildDiffers() {
+      let builds = 0;
+      (buildWithChannel as any).mockImplementation(() => {
+        const xdr = `BUILT_XDR_${++builds}`;
+        return {
+          fee: '100',
+          toXdr: () => xdr,
+          signatures: [{ hint: () => Buffer.alloc(4) }],
+          operations: [{ type: 'invokeHostFunction' }],
+        };
+      });
+    }
+
+    function contextWith(relayer: ReturnType<typeof idempotentFundRelayer>) {
+      const ctx = makeContext(KEY);
+      fundRelayer.sendTransaction = relayer.sendTransaction;
+      return ctx;
+    }
+
+    // Implementations set here outlive vi.clearAllMocks, so put the defaults back
+    let defaultValidation: any;
+    let defaultTracker: any;
+
+    beforeEach(async () => {
+      defaultValidation = (validateExistingTransactionForSubmitOnly as any).getMockImplementation();
+      defaultTracker = (FeeTracker as any).getMockImplementation();
+      mockValidateResult = {
+        type: 'func-auth',
+        func: { toXdr: () => 'FUNC_XDR' },
+        auth: [],
+        skipWait: true,
+        fundRelayerId: undefined,
+      };
+      eachBuildDiffers();
+      await useRealSubmit();
+    });
+
+    afterEach(() => {
+      (validateExistingTransactionForSubmitOnly as any).mockImplementation(defaultValidation);
+      (FeeTracker as any).mockImplementation(defaultTracker);
+    });
+
+    test('a reservation that lands after its lock expired cannot execute a second transaction', async () => {
+      const relayer = idempotentFundRelayer();
+      // Request A's reservation write passes the lease check, then stalls past
+      // the lock's TTL and lands after request B has finished
+      let releaseStalledWrite!: () => void;
+      const stalled = new Promise<void>((resolve) => (releaseStalledWrite = resolve));
+      let reachedStall!: () => void;
+      const atStall = new Promise<void>((resolve) => (reachedStall = resolve));
+      const set = kv.set.bind(kv);
+      let stalls = 1;
+      vi.spyOn(kv, 'set').mockImplementation(async (key, value, opts) => {
+        if (stalls > 0 && key.startsWith('testnet:idempotency:') && !key.endsWith(':lock')) {
+          stalls--;
+          reachedStall();
+          await stalled;
+        }
+        return set(key, value, opts);
+      });
+
+      const first = handler(contextWith(relayer));
+      await atStall;
+      advanceClock(6_000);
+      const second = await handler(contextWith(relayer));
+      expect(second).toMatchObject({ transactionId: 'tx-1', status: 'pending' });
+
+      // A's stale write now overwrites B's recorded transaction, and A sends a
+      // transaction of its own under the key
+      releaseStalledWrite();
+      const conflict = await first.catch((error) => error);
+      expect(conflict).toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT', status: 422 });
+      // Only the refused transaction is known here, so no transaction details
+      expect(conflict.details).toEqual({
+        reason: 'Relayer error: Idempotency-Key reused with a different request payload',
+      });
+      expect(relayer.sendTransaction).toHaveBeenCalledTimes(2);
+      expect(relayer.created).toEqual(['tx-1']);
+    });
+
+    test('a key reused just before the plugin record expires returns the original transaction', async () => {
+      const relayer = idempotentFundRelayer();
+      await handler(contextWith(relayer));
+
+      advanceClock(PLUGIN_TTL_MS - 60_000);
+      const repeat = contextWith(relayer);
+      fundRelayer.getTransaction.mockResolvedValue({ id: 'tx-1', status: 'confirmed', hash: 'h' });
+      await expect(handler(repeat)).resolves.toMatchObject({ transactionId: 'tx-1' });
+      expect(fundRelayer.getTransaction).toHaveBeenCalledWith({ transactionId: 'tx-1' });
+      expect(relayer.created).toEqual(['tx-1']);
+    });
+
+    test('a key reused after the plugin record expires, while the fund relayer holds it, gets a conflict', async () => {
+      const relayer = idempotentFundRelayer();
+      await handler(contextWith(relayer));
+
+      advanceClock(PLUGIN_TTL_MS + 60_000);
+      await expect(handler(contextWith(relayer))).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+      expect(relayer.created).toEqual(['tx-1']);
+
+      // The answer was the send's reply, so the next repeat gets it at once
+      await expect(handler(contextWith(relayer))).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+      expect(relayer.created).toEqual(['tx-1']);
+    });
+
+    test('a first send that reaches the fund relayer late still covers the whole plugin window', async () => {
+      const relayer = idempotentFundRelayer();
+      // The first send's reply is lost before the fund relayer sees it
+      const lost = vi.fn().mockRejectedValue(new Error("Socket request 'sendTransaction' timed out after 30000ms"));
+      const ctx = makeContext(KEY);
+      fundRelayer.sendTransaction = lost;
+      await expect(handler(ctx)).rejects.toThrow('timed out');
+
+      // A recovery resend near the record's expiry is the first send it sees
+      advanceClock(PLUGIN_TTL_MS - 60_000);
+      await expect(handler(contextWith(relayer))).resolves.toMatchObject({ transactionId: 'tx-1' });
+
+      // After the record expires, the fund relayer key from that late send
+      // still holds, so a rebuilt transaction is rejected
+      advanceClock(120_000);
+      await expect(handler(contextWith(relayer))).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+      expect(relayer.created).toEqual(['tx-1']);
+    });
+
+    /** Validates a real signed transaction expiring at maxTime with the real checks, as the handler does. */
+    async function useRealValidation(maxTime: number) {
+      const actual = await vi.importActual<typeof import('../src/plugin/tx')>('../src/plugin/tx');
+      const { payload } = await payloadExpiringAt(maxTime);
+      const sdk = await vi.importActual<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
+      const real = new sdk.Transaction(payload.transaction_xdr, sdk.Networks.TESTNET);
+      (validateExistingTransactionForSubmitOnly as any).mockImplementation((_tx: unknown, config: any) =>
+        actual.validateExistingTransactionForSubmitOnly(real, config)
+      );
+    }
+
+    test('a signed xdr reused after the plugin record expires has expired too, so nothing is sent', async () => {
+      // Validation caps maxTime at maxTimeBoundOffsetSeconds, and the record
+      // outlives that, so the transaction cannot be resent once the record is gone
+      mockValidateResult = { type: 'xdr', xdr: 'SIGNED_XDR', skipWait: true, fundRelayerId: undefined };
+      await useRealValidation(Math.floor(Date.now() / 1000) + 60);
+      const relayer = idempotentFundRelayer();
+      await expect(handler(contextWith(relayer))).resolves.toMatchObject({ transactionId: 'tx-1' });
+
+      advanceClock(PLUGIN_TTL_MS + 60_000);
+      await expect(handler(contextWith(relayer))).rejects.toMatchObject({ code: 'TIMEBOUNDS_EXPIRED' });
+      expect(relayer.sendTransaction).toHaveBeenCalledTimes(1);
+      expect(relayer.created).toEqual(['tx-1']);
+    });
+
+    test('two reservations that get the same signed xdr transaction back charge its fee once', async () => {
+      const actualTracker =
+        await vi.importActual<typeof import('../src/plugin/fee-tracking')>('../src/plugin/fee-tracking');
+      (FeeTracker as any).mockImplementation(function (config: any) {
+        return new actualTracker.FeeTracker(config);
+      });
+      mockValidateResult = { type: 'xdr', xdr: 'SIGNED_XDR', skipWait: true, fundRelayerId: undefined };
+      await useRealValidation(Math.floor(Date.now() / 1000) + 60);
+      const relayer = idempotentFundRelayer();
+      const headers = { ...KEY, 'x-api-key': ['caller-a'] };
+      const withKey = () => {
+        const ctx = makeContext(headers);
+        fundRelayer.sendTransaction = relayer.sendTransaction;
+        return ctx;
+      };
+
+      // The stale reservation write from the lock race: A's write lands after
+      // B has sent and charged, and A sends the identical body
+      let releaseStalledWrite!: () => void;
+      const stalled = new Promise<void>((resolve) => (releaseStalledWrite = resolve));
+      let reachedStall!: () => void;
+      const atStall = new Promise<void>((resolve) => (reachedStall = resolve));
+      const set = kv.set.bind(kv);
+      let stalls = 1;
+      vi.spyOn(kv, 'set').mockImplementation(async (key, value, opts) => {
+        if (stalls > 0 && /^testnet:idempotency:[0-9a-f]{64}$/.test(key)) {
+          stalls--;
+          reachedStall();
+          await stalled;
+        }
+        return set(key, value, opts);
+      });
+
+      const first = handler(withKey());
+      await atStall;
+      advanceClock(6_000);
+      await expect(handler(withKey())).resolves.toMatchObject({ transactionId: 'tx-1' });
+      releaseStalledWrite();
+      await expect(first).resolves.toMatchObject({ transactionId: 'tx-1' });
+
+      expect(relayer.created).toEqual(['tx-1']);
+      const usage = await kv.get<{ consumed: number }>('testnet:api-key-fees:caller-a');
+      expect(usage?.consumed).toBe(1000);
+    });
+
+    test('a fee marker outlives the record of a later reservation that gets the same transaction back', async () => {
+      // Reviewer's case: a 600s offset raises the 300s key TTL to the
+      // transaction lifetime, the record is lost, and a replay of the same
+      // signed transaction at 400s makes a reservation lasting past the first
+      // reservation's marker
+      const actualTracker =
+        await vi.importActual<typeof import('../src/plugin/fee-tracking')>('../src/plugin/fee-tracking');
+      (FeeTracker as any).mockImplementation(function (config: any) {
+        return new actualTracker.FeeTracker(config);
+      });
+      configOverride = { maxTimeBoundOffsetSeconds: 600, idempotencyKeyTtlSeconds: 300 };
+      mockValidateResult = { type: 'xdr', xdr: 'SIGNED_XDR', skipWait: true, fundRelayerId: undefined };
+      await useRealValidation(Math.floor(Date.now() / 1000) + 600);
+      const relayer = idempotentFundRelayer();
+      const headers = { ...KEY, 'x-api-key': ['caller-a'] };
+      const withKey = () => {
+        const ctx = makeContext(headers);
+        fundRelayer.sendTransaction = relayer.sendTransaction;
+        fundRelayer.getTransaction.mockResolvedValue({ id: 'tx-1', status: 'confirmed', hash: 'h' });
+        return ctx;
+      };
+      const consumed = async () => (await kv.get<{ consumed: number }>('testnet:api-key-fees:caller-a'))?.consumed;
+
+      await expect(handler(withKey())).resolves.toMatchObject({ transactionId: 'tx-1' });
+      expect(await consumed()).toBe(1000);
+      const recordKey = (await kv.listKeys('testnet:idempotency:*')).find((k) =>
+        /^testnet:idempotency:[0-9a-f]{64}$/.test(k)
+      )!;
+      expect(await kv.get(recordKey)).toMatchObject({ transactionId: 'tx-1' });
+
+      // The record is lost (a stalled writer deleted it)
+      await kv.del(recordKey);
+      advanceClock(400_000);
+      await expect(handler(withKey())).resolves.toMatchObject({ transactionId: 'tx-1' });
+      expect(relayer.created).toEqual(['tx-1']);
+
+      // Past the first reservation's record and margin, within the second's
+      advanceClock(600_000);
+      expect(await kv.get(recordKey)).toMatchObject({ transactionId: 'tx-1' });
+      await expect(handler(withKey())).resolves.toMatchObject({ transactionId: 'tx-1' });
+      expect(await consumed()).toBe(1000);
+    });
+
+    test('once the fund relayer key has expired too, the key starts a new transaction', async () => {
+      const relayer = idempotentFundRelayer();
+      await handler(contextWith(relayer));
+
+      advanceClock(RELAYER_TTL_MS + 60_000);
+      await expect(handler(contextWith(relayer))).resolves.toMatchObject({ transactionId: 'tx-2' });
+      expect(relayer.created).toEqual(['tx-1', 'tx-2']);
+    });
+
+    test('a first send the fund relayer is still creating for the key gets 409', async () => {
+      const ctx = makeContext(KEY);
+      fundRelayer.sendTransaction = vi
+        .fn()
+        .mockRejectedValue(new Error('Relayer error: A request with this Idempotency-Key is already in progress'));
+      await expect(handler(ctx)).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_IN_PROGRESS', status: 409 });
+      // The payload stays, so a repeat resends it
+      const [recordKey] = await kv.listKeys('testnet:idempotency:*');
+      expect(await kv.get(recordKey)).toMatchObject({ payload: expect.objectContaining({ fee_bump: true }) });
     });
   });
 

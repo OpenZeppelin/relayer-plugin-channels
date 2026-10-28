@@ -19,6 +19,7 @@ import {
   isNotSubmitted,
   onchainFailedError,
   RELAYER_IN_PROGRESS_MESSAGE,
+  RELAYER_PAYLOAD_MISMATCH_MESSAGE,
   RELAYER_TRANSACTION_GONE_MESSAGE,
   sendFeeBump,
   signWithChannelAndFund,
@@ -50,6 +51,7 @@ import {
   idempotencyScope,
   IdempotencyReservation,
   inProgressError,
+  keyConflictError,
   markSendRejected,
   outcomeUnknownError,
   recordIdempotentTransaction,
@@ -59,6 +61,7 @@ import {
   hasStoredTransactionExpired,
   reserveIdempotencyKey,
   storeIdempotentPayload,
+  type StoredTransaction,
 } from './idempotency';
 
 /** Subset of relayer metadata used by the plugin (address + network_type). */
@@ -121,10 +124,10 @@ interface PipelineContext {
   fundRelayerIdempotencyKey?: string;
   /** Called when the fund relayer answered the send with an error (see isSendRejected) */
   onSendRejected?: () => Promise<void>;
-  /** When set, the fee is recorded once per transaction under this marker key */
-  feeMarkerKey?: string;
-  /** How long the fee marker is kept */
-  feeMarkerTtlSec?: number;
+  /** When set, the fee is recorded once per transaction, under the marker key for its id */
+  feeMarkerKey?: (transactionId: string) => string;
+  /** How long the fee marker is kept, read when the fee is recorded */
+  feeMarkerTtlSec?: () => number;
 }
 
 function getApiKey(headers: Record<string, string[]>, headerName: string): string | undefined {
@@ -445,14 +448,20 @@ async function handleFuncAuthSubmit(
 async function chargeIdempotentFeeOnce(
   tracker: FeeTracker | undefined,
   reservation: IdempotencyReservation,
+  transactionId: string,
   maxFee: number | undefined,
+  transaction: StoredTransaction | undefined,
   final: { status: string; hash?: string | null; status_reason?: string | null }
 ): Promise<void> {
   // Only a final transaction that reached the network has used its fee, as
   // for a request without a key
   const charged = final.status === 'confirmed' || (final.status === 'failed' && !isNotSubmitted(final));
   if (!tracker || maxFee === undefined || !charged) return;
-  await tracker.recordUsageOnce(maxFee, idempotencyFeeKey(reservation), feeMarkerTtlSec(reservation));
+  await tracker.recordUsageOnce(
+    maxFee,
+    idempotencyFeeKey(reservation, transactionId),
+    feeMarkerTtlSec(reservation, transaction?.maxTime)
+  );
 }
 
 /**
@@ -655,7 +664,14 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       throw error;
     }
     // The first request may have ended before charging (e.g. its wait failed)
-    await chargeIdempotentFeeOnce(tracker, reserved.reservation, reserved.maxFee, existing);
+    await chargeIdempotentFeeOnce(
+      tracker,
+      reserved.reservation,
+      reserved.transactionId,
+      reserved.maxFee,
+      reserved.transaction,
+      existing
+    );
     return idempotentResult(existing, config.network);
   }
 
@@ -664,6 +680,7 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
     // same fund relayer key: the fund relayer returns the transaction it
     // created, or creates it if it holds none. Nothing is rebuilt.
     console.log(`[channels] Idempotency-Key has an unconfirmed send, resending the stored transaction`);
+    const stored = describeStoredTransaction(reserved.payload, networkPassphrase);
     let submission;
     try {
       submission = await sendFeeBump(
@@ -673,12 +690,11 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       );
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      // The fund relayer is still creating the transaction for the key
-      if (reason.includes(RELAYER_IN_PROGRESS_MESSAGE)) throw inProgressError();
-      // The fund relayer holds the key but not its transaction
-      const stored = describeStoredTransaction(reserved.payload, networkPassphrase);
-      if (reason.includes(RELAYER_TRANSACTION_GONE_MESSAGE)) {
-        throw outcomeUnknownError('gone', reason, { ...stored });
+      const keyError = fundRelayerKeyError(reason, stored);
+      if (keyError) {
+        // The fund relayer answered: a repeat may resend right away
+        if (reason.includes(RELAYER_PAYLOAD_MISMATCH_MESSAGE)) await markSendRejected(kv, reserved.reservation);
+        throw keyError;
       }
       // An answered error does not show whether the original send created a
       // transaction, so the key and payload are kept for the next repeat.
@@ -691,18 +707,19 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
       }
       throw error;
     }
-    await recordIdempotentTransaction(
-      kv,
-      reserved.reservation,
-      reserved.payload.max_fee,
-      submission.id,
-      describeStoredTransaction(reserved.payload, networkPassphrase)
-    );
+    await recordIdempotentTransaction(kv, reserved.reservation, reserved.payload.max_fee, submission.id, stored);
     // The fund relayer may return the transaction the original send created,
     // in any state: report it as the existing-transaction path does, and charge
     // it once it is final (a later repeat charges one still pending)
     const final = { ...submission, status: submission.status ?? 'pending' };
-    await chargeIdempotentFeeOnce(tracker, reserved.reservation, reserved.payload.max_fee, final);
+    await chargeIdempotentFeeOnce(
+      tracker,
+      reserved.reservation,
+      submission.id,
+      reserved.payload.max_fee,
+      stored,
+      final
+    );
     return idempotentResult(final, config.network);
   }
 
@@ -733,8 +750,9 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
         await markSendRejected(kv, reservation);
       },
       fundRelayerIdempotencyKey: fundRelayerIdempotencyKey(reservation),
-      feeMarkerKey: idempotencyFeeKey(reservation),
-      feeMarkerTtlSec: feeMarkerTtlSec(reservation),
+      feeMarkerKey: (transactionId) => idempotencyFeeKey(reservation, transactionId),
+      feeMarkerTtlSec: () =>
+        feeMarkerTtlSec(reservation, sentPayload && describeStoredTransaction(sentPayload, networkPassphrase)?.maxTime),
     });
     // Read-only calls send nothing
     if (!sentPayload) await releaseIdempotencyKey(kv, reservation);
@@ -742,13 +760,31 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
   } catch (error) {
     // Once the payload is stored a transaction may exist, so the key is kept
     if (!sentPayload) await releaseIdempotencyKey(kv, reservation);
-    // Tell the caller to retry this key rather than start another
-    if (sendRejected) {
+    if (sentPayload) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw sendFailedError(reason, describeStoredTransaction(sentPayload!, networkPassphrase));
+      const stored = describeStoredTransaction(sentPayload, networkPassphrase);
+      // Another reservation of the key reached the fund relayer first
+      const keyError = fundRelayerKeyError(reason, stored);
+      if (keyError) throw keyError;
+      // Tell the caller to retry this key rather than start another
+      if (sendRejected) throw sendFailedError(reason, stored);
     }
     throw error;
   }
+}
+
+/**
+ * The plugin error for a send error about the fund relayer key itself, or
+ * undefined for any other error: the fund relayer is still creating the key's
+ * transaction, holds the key but no longer its transaction, or holds the key
+ * for a different payload.
+ */
+function fundRelayerKeyError(reason: string, stored: StoredTransaction | undefined) {
+  if (!reason.startsWith('Relayer error:')) return undefined;
+  if (reason.includes(RELAYER_IN_PROGRESS_MESSAGE)) return inProgressError();
+  if (reason.includes(RELAYER_TRANSACTION_GONE_MESSAGE)) return outcomeUnknownError('gone', reason, { ...stored });
+  if (reason.includes(RELAYER_PAYLOAD_MISMATCH_MESSAGE)) return keyConflictError(reason);
+  return undefined;
 }
 
 /**
