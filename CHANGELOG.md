@@ -1,5 +1,11 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.21.1
+
+### Patch Changes
+
+- 7e314ff: Bump `@stellar/stellar-sdk` to `^17.4.0` for Stellar Protocol 30 (Bell). SDK releases before 17.3.0 cannot decode CAP-84 muxed contract (W...) addresses, so XDR carrying them failed to parse after the upgrade.
+
 ## 0.21.0
 
 ### Minor Changes
