@@ -90,6 +90,28 @@ describe('ChannelsClient', () => {
       expect(PluginsApi).toHaveBeenCalled();
     });
 
+    test('sends its own plugin API key, not the shared Relayer key, when pluginApiKey is set', () => {
+      (PluginsApi as any).mockImplementation(function (this: any) {
+        return { callPlugin: vi.fn() };
+      });
+
+      new ChannelsClient({
+        pluginId: 'test-plugin-id',
+        apiKey: 'relayer-api-key',
+        baseUrl: 'https://relayer.example.com',
+        pluginApiKey: 'caller-a-key',
+      });
+
+      // The Relayer API key still authenticates; the caller's key scopes it in the plugin
+      expect(Configuration).toHaveBeenCalledWith({
+        basePath: 'https://relayer.example.com',
+        accessToken: 'relayer-api-key',
+        baseOptions: {
+          headers: { 'x-api-key': 'caller-a-key' },
+        },
+      });
+    });
+
     test('should throw error when baseUrl is missing without pluginId', () => {
       expect(() => {
         new ChannelsClient({
@@ -235,6 +257,43 @@ describe('ChannelsClient', () => {
         hash: 'hash-def',
         status: 'confirmed',
       });
+    });
+
+    test('sends the idempotency key as a header when given', async () => {
+      mockAxiosInstance.post.mockResolvedValue({
+        data: { success: true, data: { transactionId: 'tx-456', hash: null, status: 'pending' } },
+      });
+
+      await client.submitSorobanTransaction(
+        { func: 'BASE64FUNC', auth: ['AUTH1'], skipWait: true },
+        { idempotencyKey: 'settle-key-1' }
+      );
+      await client.submitTransaction({ xdr: 'SIGNED_XDR' }, { idempotencyKey: 'settle-key-2' });
+
+      expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
+        1,
+        '/',
+        { params: { func: 'BASE64FUNC', auth: ['AUTH1'], skipWait: true } },
+        { headers: { 'Idempotency-Key': 'settle-key-1' } }
+      );
+      expect(mockAxiosInstance.post).toHaveBeenNthCalledWith(
+        2,
+        '/',
+        { params: { xdr: 'SIGNED_XDR' } },
+        { headers: { 'Idempotency-Key': 'settle-key-2' } }
+      );
+    });
+
+    test('rejects an empty, overlong or non-ASCII idempotency key instead of sending without it', async () => {
+      for (const idempotencyKey of ['', 'k'.repeat(256), 'café-1']) {
+        await expect(client.submitTransaction({ xdr: 'SIGNED_XDR' }, { idempotencyKey })).rejects.toThrow(
+          'idempotencyKey must be 1 to 255 visible ASCII characters'
+        );
+        await expect(client.submitTransaction({ xdr: 'SIGNED_XDR' }, { idempotencyKey })).rejects.toBeInstanceOf(
+          PluginUnexpectedError
+        );
+      }
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
     test('should include returnValue and latestLedger for read-only calls', async () => {

@@ -172,6 +172,65 @@ describe('FeeTracker', () => {
     });
   });
 
+  describe('recordUsageOnce', () => {
+    const MARKER = 'testnet:idempotency:abc:fee';
+    const consumed = async (kv: FakeKV) =>
+      (await kv.get<{ consumed: number }>('testnet:api-key-fees:test-key'))?.consumed ?? 0;
+
+    test('records the fee once per marker', async () => {
+      const kv = new FakeKV();
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key' });
+
+      await tracker.recordUsageOnce(1000, MARKER, 60);
+      await tracker.recordUsageOnce(1000, MARKER, 60);
+
+      expect(await consumed(kv)).toBe(1000);
+      expect(await kv.exists(MARKER)).toBe(true);
+    });
+
+    test('records the fee once under concurrent calls', async () => {
+      const kv = new FakeKV();
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key' });
+
+      await Promise.all([
+        tracker.recordUsageOnce(1000, MARKER, 60),
+        tracker.recordUsageOnce(1000, MARKER, 60),
+        tracker.recordUsageOnce(1000, MARKER, 60),
+      ]);
+
+      expect(await consumed(kv)).toBe(1000);
+    });
+
+    test('a failed usage write leaves no marker, so a later call records the fee', async () => {
+      const kv = new FakeKV();
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key' });
+      const set = kv.set.bind(kv);
+      const setSpy = vi.spyOn(kv, 'set').mockImplementation(async (key: string, value: any, opts?: any) => {
+        if (key === 'testnet:api-key-fees:test-key') throw new Error('kv down');
+        return set(key, value, opts);
+      });
+
+      await expect(tracker.recordUsageOnce(1000, MARKER, 60)).resolves.toBeUndefined();
+      expect(await consumed(kv)).toBe(0);
+      expect(await kv.exists(MARKER)).toBe(false);
+
+      // Storage recovers; a retry repairs the accounting
+      setSpy.mockRestore();
+      await tracker.recordUsageOnce(1000, MARKER, 60);
+      expect(await consumed(kv)).toBe(1000);
+    });
+
+    test('different markers are recorded separately', async () => {
+      const kv = new FakeKV();
+      const tracker = new FeeTracker({ kv, network: 'testnet', apiKey: 'test-key' });
+
+      await tracker.recordUsageOnce(1000, MARKER, 60);
+      await tracker.recordUsageOnce(500, 'testnet:idempotency:def:fee', 60);
+
+      expect(await consumed(kv)).toBe(1500);
+    });
+  });
+
   describe('getUsageInfo', () => {
     test('returns zero consumed when no data', async () => {
       const kv = new FakeKV();

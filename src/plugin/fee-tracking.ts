@@ -112,6 +112,43 @@ export class FeeTracker {
   }
 
   /**
+   * Record fee consumption for one transaction at most once, keyed by
+   * markerKey. Under the same lock as recordUsage, the usage is updated first
+   * and the marker written after it, so a failed usage write leaves no marker
+   * and a later call records it. Only a failed marker write after a
+   * successful usage write can count the fee twice, never zero times.
+   * Errors are logged but not thrown (non-blocking).
+   */
+  async recordUsageOnce(fee: number, markerKey: string, markerTtlSec: number): Promise<void> {
+    const maxRetries = 3;
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const result = await this.kv.withLock(
+          this.lockKey,
+          async () => {
+            if (await this.kv.exists(markerKey)) return true;
+            const state = await this.getFeeState();
+            await this.kv.set(this.consumedKey, {
+              consumed: state.consumed + fee,
+              periodStart: state.periodStart ?? Date.now(),
+            });
+            await this.kv.set(markerKey, { fee, recordedAt: Date.now() }, { ttlSec: markerTtlSec });
+            return true;
+          },
+          { ttlSec: 5, onBusy: 'skip' }
+        );
+        if (result !== null) return;
+        // Lock busy, retry with jitter
+        await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
+      } catch (err) {
+        console.warn(`[channels] Failed to record fee: ${err}`);
+        return;
+      }
+    }
+    console.warn(`[channels] Failed to record fee after ${maxRetries} retries (lock contention)`);
+  }
+
+  /**
    * Get complete usage info for management API.
    */
   async getUsageInfo(): Promise<UsageInfo> {

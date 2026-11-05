@@ -6,6 +6,7 @@ import type {
   ChannelsClientConfig,
   ChannelsXdrRequest,
   ChannelsFuncAuthRequest,
+  ChannelsSubmitOptions,
   ChannelsGetTransactionRequest,
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,
@@ -56,7 +57,7 @@ export class ChannelsClient {
         basePath: config.baseUrl,
         accessToken: config.apiKey,
         baseOptions: {
-          headers: { [apiKeyHeader]: config.apiKey },
+          headers: { [apiKeyHeader]: config.pluginApiKey ?? config.apiKey },
         },
       });
 
@@ -91,8 +92,11 @@ export class ChannelsClient {
    *   xdr: 'AAAAAgAAAAC...',
    * });
    */
-  async submitTransaction(request: ChannelsXdrRequest): Promise<ChannelsTransactionResponse> {
-    return this.call<ChannelsTransactionResponse>(request);
+  async submitTransaction(
+    request: ChannelsXdrRequest,
+    options?: ChannelsSubmitOptions
+  ): Promise<ChannelsTransactionResponse> {
+    return this.call<ChannelsTransactionResponse>(request, submitHeaders(options));
   }
 
   /**
@@ -111,8 +115,11 @@ export class ChannelsClient {
    *   auth: ['AAAABwAAAA...', 'AAAABwAAAA...'],
    * });
    */
-  async submitSorobanTransaction(request: ChannelsFuncAuthRequest): Promise<ChannelsTransactionResponse> {
-    return this.call<ChannelsTransactionResponse>(request);
+  async submitSorobanTransaction(
+    request: ChannelsFuncAuthRequest,
+    options?: ChannelsSubmitOptions
+  ): Promise<ChannelsTransactionResponse> {
+    return this.call<ChannelsTransactionResponse>(request, submitHeaders(options));
   }
 
   /**
@@ -375,13 +382,13 @@ export class ChannelsClient {
    * @throws {PluginExecutionError} Plugin rejected the request
    * @throws {PluginUnexpectedError} Malformed response or client-side errors
    */
-  private async call<T>(params: unknown): Promise<T> {
+  private async call<T>(params: unknown, headers?: Record<string, string>): Promise<T> {
     const payload = { params };
 
     // Send request and handle transport errors
     let responseBody: unknown;
     try {
-      responseBody = await this.sendCall(payload);
+      responseBody = await this.sendCall(payload, headers);
     } catch (error) {
       responseBody = this.parseAxiosError(error);
     }
@@ -404,15 +411,42 @@ export class ChannelsClient {
    * Routes to either axios (direct HTTP) or PluginsApi (relayer) based on configuration
    *
    * @param payload The complete payload (already wrapped in {params})
+   * @param headers Extra request headers, if any
    * @returns Raw response from the service/relayer
    */
-  private async sendCall(payload: { params: unknown }): Promise<unknown> {
+  private async sendCall(payload: { params: unknown }, headers?: Record<string, string>): Promise<unknown> {
     if (this.pluginsApi) {
-      const response = await this.pluginsApi.callPlugin(this.pluginId!, payload);
+      const response = headers
+        ? await this.pluginsApi.callPlugin(this.pluginId!, payload, undefined, { headers })
+        : await this.pluginsApi.callPlugin(this.pluginId!, payload);
       return response.data;
     }
 
-    const response = await this.axiosClient!.post('/', payload);
+    const response = headers
+      ? await this.axiosClient!.post('/', payload, { headers })
+      : await this.axiosClient!.post('/', payload);
     return response.data;
   }
+}
+
+/** Longest Idempotency-Key the plugin accepts */
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+
+/** The Relayer forwards only header values made of visible ASCII and drops any other */
+const VISIBLE_ASCII = /^[\x20-\x7e]+$/;
+
+/**
+ * Builds the headers for a submission's options. A given key that is empty,
+ * overlong or not visible ASCII is rejected rather than sent, since the
+ * Relayer would drop it and the call would not be idempotent.
+ */
+function submitHeaders(options?: ChannelsSubmitOptions): Record<string, string> | undefined {
+  if (options?.idempotencyKey === undefined) return undefined;
+  const key = options.idempotencyKey.trim();
+  if (key.length === 0 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH || !VISIBLE_ASCII.test(key)) {
+    throw new PluginUnexpectedError(
+      `idempotencyKey must be 1 to ${MAX_IDEMPOTENCY_KEY_LENGTH} visible ASCII characters`
+    );
+  }
+  return { 'Idempotency-Key': key };
 }

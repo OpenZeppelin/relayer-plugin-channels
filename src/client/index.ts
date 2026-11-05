@@ -12,6 +12,7 @@ export {
   RelayerConfig,
   ChannelsXdrRequest,
   ChannelsFuncAuthRequest,
+  ChannelsSubmitOptions,
   ChannelsGetTransactionRequest,
   ChannelsTransactionResponse,
   ListChannelAccountsResponse,

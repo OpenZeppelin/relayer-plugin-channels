@@ -10,6 +10,7 @@ export const HTTP_STATUS = {
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   CONFLICT: 409,
+  UNPROCESSABLE_ENTITY: 422,
   TOO_MANY_REQUESTS: 429,
   INTERNAL_SERVER_ERROR: 500,
   BAD_GATEWAY: 502,
@@ -38,6 +39,8 @@ export const POOL = {
   ACQUIRE_MAX_DELAY_MS: 500,
   // Max claim-lock attempts per spin (batch size)
   MAX_CLAIMS_PER_SPIN: 3,
+  // Attempts to take a channel's claim lock when renewing its lock
+  RENEW_MAX_ATTEMPTS: 20,
   // Hard-block cooldown for uncertain-outcome channels (~1 Stellar ledger with margin)
   CHANNEL_COOLDOWN_MS: 6_000,
   // Housekeeping TTL for per-channel LRU keys
@@ -65,6 +68,40 @@ export const SIMULATION = {
 export const TIMEOUT = {
   DEFAULT_GLOBAL_TIMEOUT_MS: 30_000,
   BUFFER_MS: 2_000,
+} as const;
+
+// Idempotency-Key support for submissions
+export const IDEMPOTENCY = {
+  /** Header name, matched case-insensitively */
+  HEADER: 'idempotency-key',
+  MAX_KEY_LENGTH: 255,
+  /**
+   * Default for how long a key keeps returning its transaction
+   * (IDEMPOTENCY_KEY_TTL_SECONDS). A key only needs to outlive its
+   * transaction's time bounds and the send reply window.
+   */
+  TTL_SECONDS: 3_600,
+  /** Comfortably past the reservation window (request budget plus max time bounds) */
+  MIN_TTL_SECONDS: 300,
+  /** Lock held only while reading or updating a key's record */
+  LOCK_TTL_SECONDS: 5,
+  /**
+   * How long after requesting a record's lock a write may still start. Well
+   * under LOCK_TTL_SECONDS, so the write lands before the lock can expire
+   */
+  LOCK_WRITE_BUDGET_MS: 2_000,
+  /** Attempts to take a record's lock before giving up */
+  RECORD_LOCK_ATTEMPTS: 10,
+  /** The plugin runtime's socket timeout (30s) plus margin: a send's reply can arrive this long after it started */
+  SEND_REPLY_WINDOW_MS: 35_000,
+  /** How long a fee marker outlives its record, for clock drift between workers */
+  FEE_MARKER_MARGIN_SECONDS: 300,
+  /**
+   * Margin past a stored transaction's maxTime before it counts as expired:
+   * validators compare maxTime with the ledger close time, which can trail
+   * this clock by a few ledgers
+   */
+  EXPIRY_MARGIN_MS: 30_000,
 } as const;
 
 // Polling for transactionWait

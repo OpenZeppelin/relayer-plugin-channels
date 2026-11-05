@@ -113,6 +113,9 @@ export class ChannelPool {
 
   /** Attempt to claim a single channel under its per-channel lock */
   private async tryClaimChannel(relayerId: string): Promise<PoolLock | null> {
+    // Skip channels that are already locked without taking their claim lock,
+    // which renewals of in-flight sends also need
+    if (await this.kv.exists(this.lockKey(relayerId))) return null;
     return this.kv.withLock(
       this.claimKey(relayerId),
       async () => {
@@ -149,6 +152,37 @@ export class ChannelPool {
       }
     } catch {
       // ignore extend errors — lock will expire via TTL
+    }
+  }
+
+  /**
+   * Extend the lock TTL if we still own it. Runs under the channel's claim
+   * lock, so no acquisition can take the channel between the ownership check
+   * and the renewal. Returns false when the lock is no longer ours (expired or
+   * taken by another request), the claim lock stays busy, or the write fails.
+   */
+  async renewLock(lock: PoolLock, ttlSec: number): Promise<boolean> {
+    try {
+      for (let attempt = 0; attempt < POOL.RENEW_MAX_ATTEMPTS; attempt++) {
+        const renewed = await this.kv.withLock(
+          this.claimKey(lock.relayerId),
+          async () => {
+            const key = this.lockKey(lock.relayerId);
+            const current = await this.kv.get<{ token?: string }>(key);
+            if (current?.token !== lock.token) return false;
+            await this.kv.set(key, { ...current, lockedAt: new Date().toISOString() }, { ttlSec });
+            return true;
+          },
+          { ttlSec: POOL.CLAIM_LOCK_TTL_SECONDS, onBusy: 'skip' }
+        );
+        if (renewed !== null) return renewed;
+        await new Promise((resolve) =>
+          setTimeout(resolve, POOL.ACQUIRE_BASE_DELAY_MS + Math.random() * POOL.ACQUIRE_BASE_DELAY_MS * 2)
+        );
+      }
+      return false;
+    } catch {
+      return false;
     }
   }
 

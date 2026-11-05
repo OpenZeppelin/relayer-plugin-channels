@@ -87,6 +87,83 @@ describe('ChannelPool', () => {
     await expect(pool.extendLock({ relayerId: 'p1', token: 'tok' })).resolves.toBeUndefined();
   });
 
+  test('renewLock extends the TTL and reports true while the lock is ours', async () => {
+    vi.useFakeTimers();
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
+    const lock = await pool.acquire(defaultOptions);
+
+    expect(await pool.renewLock(lock, 90)).toBe(true);
+    // Past the original 30s TTL, the renewed lock still holds
+    vi.advanceTimersByTime(60_000);
+    expect(await kv.exists(`testnet:channel:in-use:${lock.relayerId}`)).toBe(true);
+    vi.useRealTimers();
+  });
+
+  test('renewLock reports false once the lock expired or belongs to another request', async () => {
+    vi.useFakeTimers();
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
+    const lock = await pool.acquire(defaultOptions);
+
+    expect(await pool.renewLock({ relayerId: lock.relayerId, token: 'other' }, 90)).toBe(false);
+    vi.advanceTimersByTime(31_000);
+    expect(await pool.renewLock(lock, 90)).toBe(false);
+    vi.useRealTimers();
+  });
+
+  test('renewLock is atomic with acquisition: no request can take the channel mid-renewal', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
+    const lock = await pool.acquire(defaultOptions);
+    const lockKey = `testnet:channel:in-use:${lock.relayerId}`;
+
+    // Pause the renewal's write, after its ownership check
+    let resumeWrite!: () => void;
+    const writePaused = new Promise<void>((resolve) => (resumeWrite = resolve));
+    const set = kv.set.bind(kv);
+    vi.spyOn(kv, 'set').mockImplementation(async (key: string, value: any, opts?: any) => {
+      if (key === lockKey && value?.token === lock.token) await writePaused;
+      return set(key, value, opts);
+    });
+
+    const renewal = pool.renewLock(lock, 90);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The lock expires mid-renewal and another request tries to acquire
+    await kv.del(lockKey);
+    const competing = pool.acquire(defaultOptions);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    resumeWrite();
+
+    expect(await renewal).toBe(true);
+    await expect(competing).rejects.toMatchObject({ code: 'POOL_CAPACITY' });
+    expect(await kv.get<{ token: string }>(lockKey)).toMatchObject({ token: lock.token });
+  }, 15_000);
+
+  test('acquire does not take the claim lock of a channel that is already locked', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    await kv.set('testnet:channel:relayer-ids', { relayerIds: ['p1'] });
+    await pool.acquire(defaultOptions);
+    const withLockSpy = vi.spyOn(kv, 'withLock');
+
+    await expect(pool.acquire(defaultOptions)).rejects.toMatchObject({ code: 'POOL_CAPACITY' });
+
+    const claimLocks = withLockSpy.mock.calls.filter(([key]) => String(key).includes('p1'));
+    expect(claimLocks).toHaveLength(0);
+  }, 15_000);
+
+  test('renewLock reports false on KV errors', async () => {
+    const kv = new FakeKV();
+    const pool = new ChannelPool('testnet', kv as any, 30);
+    vi.spyOn(kv, 'get').mockRejectedValue(new Error('KV unavailable'));
+
+    expect(await pool.renewLock({ relayerId: 'p1', token: 'tok' }, 90)).toBe(false);
+  });
+
   test('LRU ordering: channels acquired longer ago are acquired first', async () => {
     const kv = new FakeKV();
     const pool = new ChannelPool('testnet', kv as any, 30);
