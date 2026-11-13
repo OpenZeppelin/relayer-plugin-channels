@@ -94,9 +94,8 @@ export async function submitWithFeeBumpAndWait(
   // skipWait: return immediately after sendTransaction without waiting for confirmation
   if (skipWait) {
     console.debug(`[channels] skipWait enabled, returning pending result immediately`);
-    if (tracker) {
-      await tracker.recordUsage(maxFee);
-    }
+    // The final state is not known here, so the whole bid is debited
+    await tracker?.recordUsage(maxFee);
     return {
       transactionId: submission.id,
       status: 'pending',
@@ -110,6 +109,8 @@ export async function submitWithFeeBumpAndWait(
   const elapsedMs = Date.now() - startTime;
   const remainingMs = globalTimeout - TIMEOUT.BUFFER_MS - elapsedMs;
   if (remainingMs <= 0) {
+    // Already sent: the transaction may still land, so the whole bid is debited
+    await tracker?.recordUsage(maxFee);
     throw pluginError('No time remaining for transaction wait', {
       code: 'WAIT_TIMEOUT',
       status: HTTP_STATUS.GATEWAY_TIMEOUT,
@@ -123,68 +124,16 @@ export async function submitWithFeeBumpAndWait(
   const timeout = Math.min(remainingMs, pollingTimeout);
   console.debug(`[channels] Transaction wait: elapsed=${elapsedMs}ms, timeout=${timeout}ms`);
 
-  // Wait for confirmation
+  // Wait for a final state
+  let final: StellarTransactionResponse;
   try {
-    const final = (await api.transactionWait(submission, {
+    final = (await api.transactionWait(submission, {
       interval: POLLING.INTERVAL_MS,
       timeout,
     })) as StellarTransactionResponse;
-
-    // Check if transaction actually succeeded
-    if (final.status === 'failed') {
-      // Record fee on on-chain failure (transaction was still submitted and consumed fees)
-      if (tracker) {
-        await tracker.recordUsage(maxFee);
-      }
-      const rawReason = final.status_reason || 'Transaction failed';
-      const decoded = decodeTransactionResult(rawReason);
-      const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
-      const contractType = context?.isLimited ? 'limited' : 'default';
-      const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
-      if (decoded && isTxInsufficientFeeError(decoded.resultCode)) {
-        const feeInfo =
-          decoded.feeCharged != null
-            ? `, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
-            : '';
-        console.error(`${base}, reason=txInsufficientFee${feeInfo}`);
-      } else if (decoded) {
-        console.error(`${base}, reason=${decoded.resultCode}`);
-      } else {
-        console.error(`${base}, reason=${rawReason}`);
-      }
-      const reason = sanitizeReason(rawReason);
-      const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
-      throw pluginError(reasonWithLab, {
-        code: 'ONCHAIN_FAILED',
-        status: HTTP_STATUS.BAD_REQUEST,
-        details: {
-          status: String(final.status),
-          reason,
-          id: final.id,
-          hash: final.hash ?? null,
-          resultCode: decoded?.resultCode ?? null,
-          labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
-        },
-      });
-    }
-
-    // Record fee on success
-    if (tracker) {
-      await tracker.recordUsage(maxFee);
-    }
-
-    return {
-      transactionId: final.id,
-      status: final.status,
-      hash: final.hash ?? null,
-    };
-  } catch (error: any) {
-    // If it's already a pluginError with ONCHAIN_FAILED, rethrow it
-    if (error.code === 'ONCHAIN_FAILED') {
-      throw error;
-    }
-
-    // Otherwise, it's a timeout - don't track fees (status unknown)
+  } catch {
+    // Final state unknown: the transaction may still land, so the whole bid is debited
+    await tracker?.recordUsage(maxFee);
     throw pluginError('Transaction wait timeout. It may still submit.', {
       code: 'WAIT_TIMEOUT',
       status: HTTP_STATUS.GATEWAY_TIMEOUT,
@@ -194,6 +143,114 @@ export async function submitWithFeeBumpAndWait(
       },
     });
   }
+
+  if (final.status === 'expired') {
+    console.error(`[channels] Transaction expired: id=${final.id}, hash=${final.hash ?? 'none'}`);
+    // The Relayer expires a transaction by the clock, without a final answer from the chain. One the
+    // network had accepted (it has a hash) may have landed just before, so its whole bid is debited.
+    if (final.hash) {
+      await tracker?.recordUsage(maxFee);
+    }
+    throw pluginError('Transaction expired: it was not seen in a ledger before its time bounds passed', {
+      code: 'TRANSACTION_EXPIRED',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: {
+        status: String(final.status),
+        reason: final.status_reason ?? null,
+        id: final.id,
+        hash: final.hash ?? null,
+      },
+    });
+  }
+
+  if (final.status === 'failed') {
+    const rawReason = final.status_reason || 'Transaction failed';
+    const decoded = decodeTransactionResult(rawReason);
+    const reason = sanitizeReason(rawReason);
+    const contractType = context?.isLimited ? 'limited' : 'default';
+    const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
+    if (decoded && isTxInsufficientFeeError(decoded.resultCode)) {
+      const feeInfo = decoded.feeCharged
+        ? `, requiredFee=${decoded.feeCharged}, shortfall=${decoded.feeCharged - maxFee}`
+        : '';
+      console.error(`${base}, reason=txInsufficientFee${feeInfo}`);
+    } else {
+      console.error(`${base}, reason=${rawReason}`);
+    }
+
+    if (rejectedBeforeLedger(final)) {
+      // Nothing happened on chain and no fee was charged
+      throw pluginError(reason, {
+        code: 'TRANSACTION_REJECTED',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: {
+          status: String(final.status),
+          reason,
+          id: final.id,
+          hash: null,
+          resultCode: decoded?.resultCode ?? null,
+        },
+      });
+    }
+
+    // A failed transaction still pays a fee. The Relayer does not report how much, so the whole bid is debited.
+    await tracker?.recordUsage(maxFee);
+    const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
+    const reasonWithLab = labUrl ? `${reason}. Debug in Stellar Lab (click "Load Transaction"): ${labUrl}` : reason;
+    throw pluginError(reasonWithLab, {
+      code: 'ONCHAIN_FAILED',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: {
+        status: String(final.status),
+        reason,
+        id: final.id,
+        hash: final.hash ?? null,
+        resultCode: decoded?.resultCode ?? null,
+        labUrl: labUrl ? `Debug this failure in Stellar Lab (click "Load Transaction"): ${labUrl}` : null,
+      },
+    });
+  }
+
+  await tracker?.recordUsage(chargedFee(final, maxFee));
+
+  return {
+    transactionId: final.id,
+    status: final.status,
+    hash: final.hash ?? null,
+  };
+}
+
+/** Reason the Relayer gives a transaction that a ledger included and that failed there. */
+const ONCHAIN_FAILURE_REASON = /^Transaction failed on-chain\b/;
+
+/**
+ * Reasons the Relayer gives a transaction that the network never accepted:
+ * it could not prepare it, or the RPC answered the submission with an error.
+ */
+const NOT_ACCEPTED_REASON = /^(?:Preparation failed:|Submission failed:.*\bTransaction submission error:)/;
+
+/**
+ * Tells whether a failed transaction is known to have never reached a ledger:
+ * the network never accepted it (no hash) and the Relayer's reason is a
+ * definite refusal.
+ *
+ * Any other failure keeps ONCHAIN_FAILED and is debited, since it may have
+ * cost a fee: one with a hash was accepted at some point, and a submission
+ * the RPC never answered (a provider error) may still have gone through.
+ */
+function rejectedBeforeLedger(final: { hash?: string | null; status_reason?: string | null }): boolean {
+  return !final.hash && NOT_ACCEPTED_REASON.test(final.status_reason ?? '');
+}
+
+/**
+ * The fee to debit for a transaction that did not fail. For a confirmed
+ * transaction the Relayer replaces `fee` with the fee the ledger charged; in
+ * any other state, or when it reports no usable value, the bid is debited.
+ */
+function chargedFee(final: { status?: unknown; fee?: unknown }, maxFee: number): number {
+  const fee = final.fee;
+  const isCharged = final.status === 'confirmed' && typeof fee === 'number' && Number.isSafeInteger(fee) && fee > 0;
+  return isCharged ? fee : maxFee;
 }
 
 /**
@@ -242,6 +299,20 @@ export function decodeTransactionResult(reason: string): DecodedTransactionResul
 }
 
 function extractResultCodeFromReasonText(reason: string): string | null {
+  // Relayer 1.5.0+: "Transaction failed on-chain. reason=X inner=Y op=Z contract_error=E".
+  // Anchored, since contract_error carries text the contract chose.
+  const onchain = reason.match(/^Transaction failed on-chain\. reason=([A-Za-z0-9_]+)(?: inner=([A-Za-z0-9_]+))?/);
+  if (onchain) {
+    // The Relayer writes "unknown" when the RPC returned no result to read
+    if (onchain[1] === 'unknown') return null;
+    return onchain[2] ? `${onchain[1]}:${onchain[2]}` : onchain[1];
+  }
+
+  // Rejected at submission: "... Transaction submission error: TxBadAuth"
+  const rejected = reason.match(/\bTransaction submission error:\s*(Tx[A-Za-z]+)$/);
+  if (rejected) return rejected[1];
+
+  // Relayer before 1.5.0
   const outerMatch = reason.match(/\bSpecific XDR reason:\s*([A-Za-z0-9_]+)\b/i);
   if (!outerMatch?.[1]) return null;
 
@@ -271,8 +342,22 @@ export function buildStellarLabTransactionUrl(network: 'testnet' | 'mainnet', tx
   return `https://lab.stellar.org/transaction/dashboard?$=network$id=${networkId}&label=${label}&horizonUrl=${horizonParam}&rpcUrl=${rpcParam}&passphrase=${passphraseParam}&txDashboard$transactionHash=${txHash};;`;
 }
 
-/** Strip provider wrapper text, extract last segment (e.g., "TxInsufficientBalance") */
+/**
+ * Reduce a Relayer failure reason to a message for the client.
+ *
+ * An on-chain failure reason and the text of a validation error describe the
+ * transaction, so they are kept whole (e.g. "max_fee (100203) is insufficient.
+ * Required fee-bump fee: 20000000"). Any other reason is cut to its last
+ * segment (e.g. "TxInsufficientBalance"), dropping the layers in front of it.
+ */
 export function sanitizeReason(reason: string): string {
+  if (ONCHAIN_FAILURE_REASON.test(reason)) return reason;
+
+  const validation = reason.match(
+    /^(?:(?:Preparation|Submission) failed: )?(?:Transaction|Stellar) validation error: (.+)$/s
+  );
+  if (validation) return validation[1].trim();
+
   const segments = reason.split(/:\s*/);
   const last = segments[segments.length - 1]?.trim();
   if (last && last.length > 2 && !last.toLowerCase().includes('provider')) {

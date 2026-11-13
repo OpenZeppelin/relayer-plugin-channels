@@ -1,6 +1,14 @@
 import { describe, test, expect } from 'vitest';
-import { calculateMaxFee, InclusionFees } from '../src/plugin/fee';
-import { TransactionBuilder, Account, Networks, BASE_FEE, Contract, SorobanDataBuilder } from '@stellar/stellar-sdk';
+import { calculateMaxFee, checkMaxTransactionFee, InclusionFees } from '../src/plugin/fee';
+import {
+  TransactionBuilder,
+  Account,
+  Networks,
+  BASE_FEE,
+  Contract,
+  SorobanDataBuilder,
+  Operation,
+} from '@stellar/stellar-sdk';
 import { FEE } from '../src/plugin/constants';
 
 describe('fee', () => {
@@ -90,16 +98,78 @@ describe('fee', () => {
       const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
       expect(fee).toBe(FEE.NON_SOROBAN_FEE + DEFAULT_FEES.inclusionFeeDefault);
     });
+  });
 
-    test('uses inner tx fee as floor when computed fee would underpay', () => {
+  // The Relayer rejects a fee bump whose max_fee is below the CAP-15 minimum:
+  // the inner inclusion fee rate (at least 100 stroops) for every inner
+  // operation plus one, with the Soroban resource fee counted once.
+  describe('fee-bump minimum', () => {
+    function buildClassicTx(feePerOp: number, ops: number): any {
+      const builder = new TransactionBuilder(sourceAccount, {
+        fee: feePerOp.toString(),
+        networkPassphrase: passphrase,
+      });
+      for (let i = 0; i < ops; i++) {
+        builder.addOperation(Operation.bumpSequence({ bumpTo: '10' }));
+      }
+      return builder.setTimeout(30).build();
+    }
+
+    test('never bids below the base fee per operation', () => {
+      // Inner fee equals the resource fee, so the inner inclusion fee rate is 0
+      const tx = buildSorobanTxWithResourceFee(50_000n);
+      const lowFees: InclusionFees = { inclusionFeeDefault: 150, inclusionFeeLimited: 150 };
+
+      const fee = calculateMaxFee(tx, new Set(), lowFees);
+      expect(fee).toBe(Number(BASE_FEE) * 2 + 50_000);
+    });
+
+    test('keeps the flat classic fee while it covers the minimum', () => {
+      const tx = buildClassicTx(50_101, 1);
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(fee).toBe(FEE.NON_SOROBAN_FEE + DEFAULT_FEES.inclusionFeeDefault);
+    });
+
+    test('raises a classic max_fee to twice the inner fee for one operation', () => {
+      const tx = buildClassicTx(60_000, 1);
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(fee).toBe(120_000);
+    });
+
+    test('raises a classic max_fee by one extra operation at the inner fee rate', () => {
+      const tx = buildClassicTx(150_000, 2);
+      expect(tx.fee).toBe('300000');
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(fee).toBe(450_000);
+    });
+
+    test('rounds the inner fee rate up', () => {
+      // 3 operations at 60,000 each, plus a fee the builder cannot produce: set it by hand
+      const tx = buildClassicTx(60_000, 3);
+      Object.defineProperty(tx, 'fee', { value: '180001' });
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(fee).toBe(60_001 * 4);
+    });
+
+    test('covers a Soroban inner inclusion fee above the base fee', () => {
+      const resourceFee = 50_000n;
+      // classic=201 and resource=50000 yields inner fee 50201, the most FEE_MISMATCH allows
+      const tx = buildSorobanTxWithInnerFee(201n, resourceFee);
+      expect(tx.fee).toBe('50201');
+
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(fee).toBe(201 * 2 + 50_000);
+    });
+
+    test('counts the Soroban resource fee once when the inner fee is the larger', () => {
       const resourceFee = 25102n;
       // With stellar-sdk >=14.1.0, build() adds resource fee on top of classic fee.
       // classic=25202 and resource=25102 yields inner fee 50304.
       const tx = buildSorobanTxWithInnerFee(25202n, resourceFee);
+      expect(tx.fee).toBe('50304');
 
       const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
-      expect(tx.fee).toBe('50304');
-      expect(fee).toBe(50304 + DEFAULT_FEES.inclusionFeeDefault);
+      expect(fee).toBe(25202 * 2 + 25102);
     });
   });
 
@@ -124,5 +194,21 @@ describe('fee', () => {
       const fee = calculateMaxFee(tx, limitedContracts, customFees);
       expect(fee).toBe(FEE.NON_SOROBAN_FEE + 300);
     });
+  });
+});
+
+describe('checkMaxTransactionFee', () => {
+  test('accepts a fee at the cap', () => {
+    expect(() => checkMaxTransactionFee(100_000_000, 100_000_000)).not.toThrow();
+  });
+
+  test('rejects a fee above the cap with MAX_FEE_EXCEEDED', () => {
+    expect(() => checkMaxTransactionFee(100_000_001, 100_000_000)).toThrow(
+      expect.objectContaining({
+        code: 'MAX_FEE_EXCEEDED',
+        status: 400,
+        details: { fee: 100_000_001, maxTransactionFee: 100_000_000 },
+      })
+    );
   });
 });

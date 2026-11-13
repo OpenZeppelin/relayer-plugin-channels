@@ -105,7 +105,8 @@ vi.mock('../src/plugin/submit', async (importOriginal) => {
 });
 
 // Mock fee
-vi.mock('../src/plugin/fee', () => ({
+vi.mock('../src/plugin/fee', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/plugin/fee')>()),
   calculateMaxFee: vi.fn().mockReturnValue(1203),
   getContractIdFromFunc: vi.fn().mockReturnValue('CONTRACT123'),
   getContractIdFromTransaction: vi.fn(),
@@ -279,6 +280,22 @@ describe('handler sequence cache lifecycle', () => {
     expect(poolSpies.release).not.toHaveBeenCalled();
     expect(poolSpies.releaseWithCooldown).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
   });
+
+  test.each(['TRANSACTION_REJECTED', 'TRANSACTION_EXPIRED'])(
+    'clears the sequence and releases with cooldown on %s errors',
+    async (code) => {
+      const err = new Error('failed before reaching a ledger') as any;
+      err.code = code;
+      mockSubmit.mockRejectedValue(err);
+
+      const ctx = makeContext(kv);
+      await expect(handler(ctx)).rejects.toMatchObject({ code });
+
+      expect(clearSequenceSpy).toHaveBeenCalledWith(kv, 'testnet', CHANNEL_ADDRESS);
+      expect(poolSpies.release).not.toHaveBeenCalled();
+      expect(poolSpies.releaseWithCooldown).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
+    }
+  );
 
   test('releases lock normally on success', async () => {
     mockSubmit.mockResolvedValue({

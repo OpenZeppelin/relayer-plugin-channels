@@ -70,8 +70,13 @@ vi.mock('../src/plugin/submit', () => ({
   }),
 }));
 
-// Mock tx validation — return an object with toXdr
-vi.mock('../src/plugin/tx', () => ({
+// Mock tx parsing and validation — parse with the mocked Transaction below, validate to an object with toXdr
+vi.mock('../src/plugin/tx', async () => ({
+  parseTransactionXdr: await import('@stellar/stellar-sdk').then(
+    ({ Transaction }) =>
+      (xdr: string, passphrase: string) =>
+        new Transaction(xdr, passphrase)
+  ),
   validateExistingTransactionForSubmitOnly: vi.fn().mockImplementation(() => ({
     fee: '100',
     toXdr: () => 'MOCK_XDR',
@@ -80,7 +85,8 @@ vi.mock('../src/plugin/tx', () => ({
 }));
 
 // Mock fee
-vi.mock('../src/plugin/fee', () => ({
+vi.mock('../src/plugin/fee', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/plugin/fee')>()),
   calculateMaxFee: vi.fn().mockReturnValue(1000),
   getContractIdFromFunc: vi.fn(),
   getContractIdFromTransaction: vi.fn(),
@@ -225,6 +231,29 @@ describe('alternative fund relayer selection', () => {
     await handler(ctx);
 
     expect(useRelayerMock).toHaveBeenCalledWith('fund-1');
+  });
+
+  // calculateMaxFee is mocked to 1000 stroops
+  test('accepts a transaction whose fee is at the per-transaction cap', async () => {
+    configOverride = { maxTransactionFee: 1000 };
+
+    await expect(handler(makeContext())).resolves.toMatchObject({ status: 'confirmed' });
+  });
+
+  test('rejects a signed XDR whose fee is above the per-transaction cap before submitting', async () => {
+    configOverride = { maxTransactionFee: 999 };
+
+    await expect(handler(makeContext())).rejects.toMatchObject({ code: 'MAX_FEE_EXCEEDED', status: 400 });
+    expect(submitWithFeeBumpAndWait).not.toHaveBeenCalled();
+  });
+
+  test('rejects a func+auth transaction above the per-transaction cap and releases its channel', async () => {
+    configOverride = { maxTransactionFee: 999 };
+    mockValidateResult = { ...mockValidateResult, xdr: 'UNSIGNED_XDR' };
+
+    await expect(handler(makeContext())).rejects.toMatchObject({ code: 'MAX_FEE_EXCEEDED', status: 400 });
+    expect(submitWithFeeBumpAndWait).not.toHaveBeenCalled();
+    expect(poolSpies.release).toHaveBeenCalledWith({ relayerId: 'channel-1', token: 'tok' });
   });
 
   test('uses specified fund relayer when fundRelayerId is in allowed list', async () => {

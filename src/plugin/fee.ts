@@ -8,8 +8,9 @@
  * - Inclusion fees are configurable via INCLUSION_FEE_DEFAULT and INCLUSION_FEE_LIMITED env vars
  */
 
-import { Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';
-import { FEE } from './constants';
+import { BASE_FEE, Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';
+import { pluginError } from '@openzeppelin/relayer-sdk';
+import { FEE, HTTP_STATUS } from './constants';
 
 export interface InclusionFees {
   inclusionFeeDefault: number;
@@ -59,9 +60,23 @@ function getInclusionFee(contractId: string | undefined, limitedContracts: Set<s
 }
 
 /**
+ * Minimum fee the Relayer accepts for a fee bump of this transaction (CAP-15):
+ * the inner inclusion fee rate, at least the base fee, for every inner
+ * operation plus one, with the Soroban resource fee counted once.
+ */
+function feeBumpMinimumFee(innerTxFee: bigint, resourceFee: bigint, operationCount: number): bigint {
+  const innerOps = BigInt(Math.max(operationCount, 1));
+  const innerInclusionFee = innerTxFee > resourceFee ? innerTxFee - resourceFee : 0n;
+  const ratePerOp = (innerInclusionFee + innerOps - 1n) / innerOps; // rounded up
+  const baseFee = BigInt(BASE_FEE);
+  return (ratePerOp > baseFee ? ratePerOp : baseFee) * (innerOps + 1n) + resourceFee;
+}
+
+/**
  * Compute the maximum fee (in stroops) for a transaction: the Soroban resource
  * fee declared in the envelope's sorobanData (0 for classic transactions) plus
  * the inclusion fee, which is higher when the invoked contract is rate-limited.
+ * Raised to the fee-bump minimum when the inner transaction's own fee needs more.
  */
 export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<string>, fees: InclusionFees): number {
   const envelope = transaction.toEnvelope();
@@ -81,13 +96,13 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
     resourceFee > 0n ? resourceFee + BigInt(inclusionFee) : BigInt(FEE.NON_SOROBAN_FEE + inclusionFee);
   const innerTxFee = BigInt(transaction.fee);
 
-  // Safety floor: fee bump max_fee must always cover the actual inner transaction fee.
-  // This protects against upstream fee-field mismatches that can produce a larger inner fee.
-  const fee = computedFee >= innerTxFee ? computedFee : innerTxFee + BigInt(inclusionFee);
+  // A fee bump below the minimum for its inner transaction is rejected before submission
+  const minimumFee = feeBumpMinimumFee(innerTxFee, resourceFee, transaction.operations.length);
+  const fee = computedFee >= minimumFee ? computedFee : minimumFee;
 
   if (fee !== computedFee) {
     console.warn(
-      `[channels] Fee mismatch detected: computed=${computedFee}, innerTxFee=${innerTxFee}. Using max_fee=${fee}`
+      `[channels] Inner transaction fee needs a higher fee bump: computed=${computedFee}, innerTxFee=${innerTxFee}. Using max_fee=${fee}`
     );
   }
 
@@ -95,4 +110,23 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
     `[channels] Calculated max_fee: ${Number(fee)} stroops (resourceFee: ${resourceFee}, inclusionFee: ${inclusionFee}, innerTxFee: ${innerTxFee})`
   );
   return Number(fee);
+}
+
+/**
+ * Reject a transaction whose fee bid is above what the fund relayer sponsors
+ * for one transaction. The bid comes from the client's envelope (the Soroban
+ * resource fee, or the inner fee of a classic transaction) or from simulation,
+ * so without a cap a single request could bid any amount.
+ */
+export function checkMaxTransactionFee(fee: number, maxTransactionFee: number): void {
+  if (fee > maxTransactionFee) {
+    throw pluginError(
+      `Transaction fee (${fee} stroops) exceeds the maximum sponsored per transaction (${maxTransactionFee} stroops)`,
+      {
+        code: 'MAX_FEE_EXCEEDED',
+        status: HTTP_STATUS.BAD_REQUEST,
+        details: { fee, maxTransactionFee },
+      }
+    );
+  }
 }

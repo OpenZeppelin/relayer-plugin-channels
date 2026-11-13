@@ -58,12 +58,33 @@ describe('config', () => {
     expect(loadConfig().feeLimit).toBeUndefined();
     process.env.FEE_LIMIT = '100000';
     expect(loadConfig().feeLimit).toBe(100000);
-    process.env.FEE_LIMIT = '-100';
-    expect(loadConfig().feeLimit).toBeUndefined();
-    process.env.FEE_LIMIT = 'invalid';
-    expect(loadConfig().feeLimit).toBeUndefined();
+    process.env.FEE_LIMIT = '   ';
+    expect(loadConfig().feeLimit).toBeUndefined(); // blank is unset, like the other variables
+    process.env.FEE_LIMIT = '0';
+    expect(loadConfig().feeLimit).toBe(0);
     process.env.FEE_LIMIT = '50000.7';
     expect(loadConfig().feeLimit).toBe(50000); // floors to integer
+  });
+
+  // An invalid limit must not silently mean "no limit"
+  test.each(['-100', 'invalid', '100 XLM', 'Infinity'])('rejects invalid fee limit %j', (value) => {
+    process.env.FEE_LIMIT = value;
+    expect(() => loadConfig()).toThrow(expect.objectContaining({ code: 'CONFIG_INVALID', status: 500 }));
+  });
+
+  test('max transaction fee env', () => {
+    delete process.env.MAX_TRANSACTION_FEE;
+    expect(loadConfig().maxTransactionFee).toBe(100_000_000); // 10 XLM
+    process.env.MAX_TRANSACTION_FEE = '5000000';
+    expect(loadConfig().maxTransactionFee).toBe(5_000_000);
+    process.env.MAX_TRANSACTION_FEE = '5000000.9';
+    expect(loadConfig().maxTransactionFee).toBe(5_000_000); // floors to integer
+  });
+
+  // An invalid cap must not silently fall back to another value
+  test.each(['0', '-1', 'invalid', 'Infinity'])('rejects invalid max transaction fee %j', (value) => {
+    process.env.MAX_TRANSACTION_FEE = value;
+    expect(() => loadConfig()).toThrow(expect.objectContaining({ code: 'CONFIG_INVALID', status: 500 }));
   });
 
   test('api key header', () => {

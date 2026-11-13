@@ -122,6 +122,32 @@ describe('get-transaction handler', () => {
     mockValidateResult.transactionId = 'tx-123';
   });
 
+  test('returns 404 TRANSACTION_NOT_FOUND for an unknown transaction id', async () => {
+    const ctx = makeContext();
+    getTransactionMock.mockRejectedValue(new Error('Relayer error: Transaction with ID tx-123 not found'));
+
+    await expect(handler(ctx)).rejects.toMatchObject({
+      code: 'TRANSACTION_NOT_FOUND',
+      status: 404,
+      details: { transactionId: 'tx-123' },
+    });
+  });
+
+  test('returns 404 for an unknown transaction id that contains a space', async () => {
+    const ctx = makeContext();
+    getTransactionMock.mockRejectedValue(new Error('Relayer error: Transaction with ID abc def not found'));
+
+    await expect(handler(ctx)).rejects.toMatchObject({ code: 'TRANSACTION_NOT_FOUND', status: 404 });
+  });
+
+  test('rethrows other getTransaction errors unchanged', async () => {
+    const ctx = makeContext();
+    const failure = new Error('Relayer error: Relayer is paused');
+    getTransactionMock.mockRejectedValue(failure);
+
+    await expect(handler(ctx)).rejects.toBe(failure);
+  });
+
   test('does not call getRelayer or acquire pool', async () => {
     const ctx = makeContext();
     await handler(ctx);

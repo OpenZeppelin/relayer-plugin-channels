@@ -232,7 +232,7 @@ export ALLOWED_FUND_RELAYER_IDS="x402-channels-fund"
 export LOCK_TTL_SECONDS=10              # default: 30, min: 3, max: 60
 
 # Fee tracking (optional)
-export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set)
+export FEE_LIMIT=1000000                  # Default max fee per API key in stroops (disabled if not set; an invalid value is a configuration error)
 export FEE_RESET_PERIOD_SECONDS=86400     # Reset fee consumption every N seconds (e.g., 86400 = 24 hours)
 export API_KEY_HEADER="x-api-key"         # Header name to extract API key (default: x-api-key)
 
@@ -243,6 +243,9 @@ export CONTRACT_CAPACITY_RATIO=0.8        # Max ratio of pool for limited contra
 # Inclusion fee overrides (optional)
 export INCLUSION_FEE_DEFAULT=203           # Inclusion fee in stroops for regular contracts (default: BASE_FEE * 2 + 3 = 203)
 export INCLUSION_FEE_LIMITED=201           # Inclusion fee in stroops for limited contracts (default: BASE_FEE * 2 + 1 = 201)
+
+# Per-transaction fee cap (optional)
+export MAX_TRANSACTION_FEE=100000000       # Highest fee bid (max_fee) in stroops for one transaction (default: 100000000 = 10 XLM)
 
 # Sequence number cache (optional)
 export SEQUENCE_NUMBER_CACHE_MAX_AGE_MS=120000  # Max age of cached sequence numbers in ms (default: 120000)
@@ -599,10 +602,23 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 }
 ```
 
+- `consumed`: Fees debited from the API key in stroops (see below)
 - `limit`: Effective fee limit (custom if set, otherwise default)
 - `remaining`: Remaining fee budget in stroops
 - `periodStartAt`: Datetime string when current period started (if reset period configured)
 - `periodEndsAt`: Datetime string when period will reset (if reset period configured)
+
+What a transaction debits depends on how it ended:
+
+| Outcome                                                                                           | Debited                                                                |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Confirmed                                                                                         | The fee the ledger charged                                             |
+| Failed on-chain (`ONCHAIN_FAILED`)                                                                | The fee bid (`max_fee`)                                                |
+| Not known yet (`skipWait`, `WAIT_TIMEOUT`)                                                        | The fee bid (`max_fee`), since it may still land                       |
+| Expired after the network accepted it (`TRANSACTION_EXPIRED` with a `hash`)                       | The fee bid (`max_fee`), since it may have landed just before expiring |
+| Never accepted by the network (`TRANSACTION_REJECTED`, or `TRANSACTION_EXPIRED` without a `hash`) | Nothing                                                                |
+
+The budget check before submission always uses the fee bid.
 
 ### Get Fee Limit
 
@@ -1119,6 +1135,8 @@ Response:
 
 The `status` field reflects the transaction's current state (e.g., `"pending"`, `"sent"`, `"submitted"`, `"confirmed"`, `"failed"`, `"expired"`). The `hash` field is `null` until the transaction is submitted.
 
+An unknown `transactionId` returns HTTP 404 with code `TRANSACTION_NOT_FOUND`.
+
 ### Response
 
 Responses follow the Relayer envelope `{ success, data, error }`.
@@ -1173,7 +1191,11 @@ Plugin error example:
 ### Transaction Validation (XDR mode)
 
 - Envelope type must be `envelopeTypeTx` (not fee bump)
-- TimeBounds maxTime must be within 30 seconds from now
+- TimeBounds maxTime is required (signed XDR), must not be in the past and must be at most `MAX_TIME_BOUND_OFFSET_SECONDS` (default: 60) from now
+
+### Fee Validation (all modes)
+
+- The fee bid (`max_fee`) for one transaction must not exceed `MAX_TRANSACTION_FEE` (default: 10 XLM). The bid is the Soroban resource fee plus the inclusion fee, or a flat 100,000 stroops plus the inclusion fee for a classic transaction. In both cases it is raised to the fee-bump minimum for the inner transaction's fee when that is higher
 
 ## KV Schema
 
@@ -1214,14 +1236,14 @@ Plugin error example:
 ### Request Validation
 
 - `INVALID_PARAMS`: Invalid request parameters
-- `INVALID_XDR`: Failed to parse XDR
-- `INVALID_ENVELOPE_TYPE`: Not a regular transaction envelope
+- `INVALID_XDR`: `xdr` is not a valid base64 transaction envelope
+- `INVALID_ENVELOPE_TYPE`: Not a regular transaction envelope (e.g., a fee-bump envelope)
 - `INVALID_UNSIGNED_XDR`: Unsigned XDR must contain exactly one `invokeHostFunction` operation
-- `INVALID_TIME_BOUNDS`: TimeBounds too far in the future
+- `TIMEBOUNDS_MISSING`: Signed transaction has no `timeBounds.maxTime`
 - `TIMEBOUNDS_EXPIRED`: Transaction timebounds have expired
 - `TIMEBOUNDS_TOO_FAR`: Transaction timebounds maxTime too far in the future
 - `FEE_MISMATCH`: Fee mismatch in signed transaction
-- `INVALID_OPERATION_SOURCE`: Operation source does not match transaction source
+- `MAX_FEE_EXCEEDED`: Fee bid for the transaction exceeds `MAX_TRANSACTION_FEE`
 
 ### Pool & Channel
 
@@ -1243,8 +1265,11 @@ Plugin error example:
 ### Submission
 
 - `INVALID_SIGNATURE`: Invalid channel signature response
-- `ONCHAIN_FAILED`: Transaction failed on-chain
-- `WAIT_TIMEOUT`: Transaction wait timeout
+- `ONCHAIN_FAILED`: Transaction was included in a ledger and failed there. `details.resultCode` holds the result code (`Outer` or `Outer:Inner`, e.g. `TxFeeBumpInnerFailed:TxFailed`) and `details.hash` the transaction hash. Also returned when the Relayer failed the transaction without a definite answer from the network (e.g., an RPC timeout while submitting)
+- `TRANSACTION_REJECTED`: Transaction was refused before any ledger included it: the Relayer could not prepare it, or the network rejected it on submission (e.g., a bad signature or sequence number, which the Relayer reports as `TxFeeBumpInnerFailed` without the inner code). Nothing happened on-chain and `details.hash` is `null`
+- `TRANSACTION_EXPIRED`: Transaction was not seen in a ledger before its time bounds passed. `details.hash` is set when the network had accepted it
+- `WAIT_TIMEOUT`: Transaction wait timeout (HTTP 504). The transaction may still land; poll `details.id` with `getTransaction`
+- `TRANSACTION_NOT_FOUND`: `getTransaction` was called with an unknown transaction ID (HTTP 404)
 
 ### Fee Tracking
 

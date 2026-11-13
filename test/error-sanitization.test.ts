@@ -133,6 +133,29 @@ describe('sanitizeReason', () => {
     const reason = 'Error: Invalid format: expected JSON';
     expect(sanitizeReason(reason)).toBe('expected JSON');
   });
+
+  test('keeps only the last segment of a failure that is not a validation error', () => {
+    const reason = 'Preparation failed: Signer error: Failed to sign: KMS key unavailable';
+    expect(sanitizeReason(reason)).toBe('KMS key unavailable');
+  });
+
+  test('keeps the Relayer message for an insufficient max_fee', () => {
+    const reason =
+      'Preparation failed: Transaction validation error: max_fee (100203) is insufficient. Required fee-bump fee: 20000000';
+    expect(sanitizeReason(reason)).toBe('max_fee (100203) is insufficient. Required fee-bump fee: 20000000');
+  });
+
+  test('keeps the Relayer message for a max_fee overflow', () => {
+    const reason =
+      'Preparation failed: Transaction validation error: Fee conversion overflow: max_fee (1000000000203) exceeds u32::MAX';
+    expect(sanitizeReason(reason)).toBe('Fee conversion overflow: max_fee (1000000000203) exceeds u32::MAX');
+  });
+
+  test('keeps an on-chain failure reason whole', () => {
+    const reason =
+      'Transaction failed on-chain. reason=TxFeeBumpInnerFailed inner=TxFailed op=Trapped contract_error=Contract(7) message="oracle provider error: stale"';
+    expect(sanitizeReason(reason)).toBe(reason);
+  });
 });
 
 describe('decodeTransactionResult', () => {
@@ -184,6 +207,28 @@ describe('decodeTransactionResult', () => {
     const result = decodeTransactionResult(reason);
     expect(result).not.toBeNull();
     expect(result!.resultCode).toBe('TxInsufficientFee');
+  });
+
+  test('extracts the outer result code from the on-chain failure reason', () => {
+    const result = decodeTransactionResult('Transaction failed on-chain. reason=TxBadSeq');
+    expect(result).toEqual({ feeCharged: 0, resultCode: 'TxBadSeq' });
+  });
+
+  test('extracts outer and inner result codes from the on-chain failure reason', () => {
+    const reason =
+      'Transaction failed on-chain. reason=TxFeeBumpInnerFailed inner=TxFailed op=Trapped contract_error=Contract(7) message="reason=Fake inner=Fake"';
+    const result = decodeTransactionResult(reason);
+    expect(result).toEqual({ feeCharged: 0, resultCode: 'TxFeeBumpInnerFailed:TxFailed' });
+  });
+
+  test('returns null when the Relayer could not read the on-chain result', () => {
+    expect(decodeTransactionResult('Transaction failed on-chain. reason=unknown')).toBeNull();
+  });
+
+  test('extracts the result code from a submission rejection', () => {
+    const reason = 'Submission failed: Unexpected error: Transaction submission error: TxFeeBumpInnerFailed';
+    const result = decodeTransactionResult(reason);
+    expect(result).toEqual({ feeCharged: 0, resultCode: 'TxFeeBumpInnerFailed' });
   });
 
   test('returns null for reason without XDR', () => {

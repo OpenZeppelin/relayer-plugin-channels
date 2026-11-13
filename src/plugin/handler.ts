@@ -16,14 +16,20 @@ import { signWithChannelAndFund, submitWithFeeBumpAndWait, SubmitContext } from 
 import { HTTP_STATUS, POOL, RELAYER_INFO_CACHE_TTL_SECONDS } from './constants';
 import { Transaction, xdr } from '@stellar/stellar-sdk';
 import { simulateTransaction, buildWithChannel } from './simulation';
-import { calculateMaxFee, getContractIdFromFunc, InclusionFees, getContractIdFromTransaction } from './fee';
+import {
+  calculateMaxFee,
+  checkMaxTransactionFee,
+  getContractIdFromFunc,
+  InclusionFees,
+  getContractIdFromTransaction,
+} from './fee';
 import {
   parseFundRelayerOverrides,
   resolveInclusionFees,
   resolveTimeouts,
   resolveTransactionParams,
 } from './fund-relayer-config';
-import { validateExistingTransactionForSubmitOnly } from './tx';
+import { parseTransactionXdr, validateExistingTransactionForSubmitOnly } from './tx';
 import { FeeTracker } from './fee-tracking';
 import { getSequence, commitSequence, clearSequence } from './sequence';
 
@@ -64,6 +70,15 @@ export async function getCachedRelayerInfo(
   const entry: CachedRelayerInfo = { address: info.address, network_type: info.network_type };
   relayerInfoCache.set(cacheKey, { info: entry, expiresAt: Date.now() + RELAYER_INFO_CACHE_TTL_SECONDS * 1000 });
   return entry;
+}
+
+/** Relayer error for a transaction id it does not have (unknown, or pruned after it became final). */
+const RELAYER_TRANSACTION_NOT_FOUND = /Transaction with ID .+ not found/;
+
+/** Tells whether a getTransaction call failed because the Relayer does not have the transaction. */
+function isTransactionNotFound(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return RELAYER_TRANSACTION_NOT_FOUND.test(message);
 }
 
 interface PipelineContext {
@@ -131,7 +146,7 @@ async function handleXdrSubmit(
   ctx: PipelineContext,
   skipWait?: boolean
 ): Promise<ChannelAccountsResponse> {
-  const tx = new Transaction(xdrStr, ctx.networkPassphrase);
+  const tx = parseTransactionXdr(xdrStr, ctx.networkPassphrase);
 
   // Unsigned XDR: extract func+auth and route through channel path
   if (tx.signatures.length === 0) {
@@ -157,6 +172,7 @@ async function handleXdrSubmit(
   const validated = validateExistingTransactionForSubmitOnly(tx, ctx.config);
   const maxFee = calculateMaxFee(validated, ctx.acquireOptions.limitedContracts, ctx.fees);
   const contractId = getContractIdFromTransaction(validated);
+  checkMaxTransactionFee(maxFee, ctx.config.maxTransactionFee);
   await ctx.tracker?.checkBudget(maxFee);
   const submitContext: SubmitContext = {
     contractId,
@@ -260,6 +276,7 @@ async function handleFuncAuthSubmit(
     const maxFee = calculateMaxFee(signedTx, ctx.acquireOptions.limitedContracts, ctx.fees);
     console.debug(`[channels] After signing: signedTx.fee=${signedTx.fee}, maxFee=${maxFee}`);
     const contractId = getContractIdFromFunc(func);
+    checkMaxTransactionFee(maxFee, ctx.config.maxTransactionFee);
     await ctx.tracker?.checkBudget(maxFee);
     const submitContext: SubmitContext = {
       contractId,
@@ -300,9 +317,14 @@ async function handleFuncAuthSubmit(
         console.log(`[channels] Extending lock for WAIT_TIMEOUT (${extendSec}s)`);
         await ctx.pool.extendLock(poolLock, extendSec);
         poolLock = undefined; // skip release in finally
-      } else if (error.code === 'ONCHAIN_FAILED') {
-        // Sequence was consumed (tx landed on chain) — cooldown prevents
-        // next acquirer from hitting stale RPC and reusing old sequence
+      } else if (
+        error.code === 'ONCHAIN_FAILED' ||
+        error.code === 'TRANSACTION_REJECTED' ||
+        error.code === 'TRANSACTION_EXPIRED'
+      ) {
+        // ONCHAIN_FAILED consumed the sequence (tx landed on chain); a rejected
+        // or expired tx may have been refused over a stale one. The cooldown
+        // keeps the next acquirer from reading a stale sequence from RPC.
         needsCooldown = true;
       }
       throw error;
@@ -377,7 +399,19 @@ async function channelAccounts(context: PluginContext): Promise<ChannelAccountsR
 
   // 2a. Handle get-transaction early — no pool, channel, or simulation needed
   if (request.type === 'get-transaction') {
-    const res = await (fundRelayer as Relayer).getTransaction({ transactionId: request.transactionId });
+    let res: Awaited<ReturnType<Relayer['getTransaction']>>;
+    try {
+      res = await (fundRelayer as Relayer).getTransaction({ transactionId: request.transactionId });
+    } catch (error) {
+      if (isTransactionNotFound(error)) {
+        throw pluginError('Transaction not found', {
+          code: 'TRANSACTION_NOT_FOUND',
+          status: HTTP_STATUS.NOT_FOUND,
+          details: { transactionId: request.transactionId },
+        });
+      }
+      throw error;
+    }
     const stellar = res as { id: string; status: string; hash?: string };
     return {
       transactionId: stellar.id,
