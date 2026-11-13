@@ -1,5 +1,23 @@
 # @openzeppelin/relayer-plugin-channels
 
+## 0.21.1
+
+### Patch Changes
+
+- 7e314ff: Bump `@stellar/stellar-sdk` to `^17.4.0` for Stellar Protocol 30 (Bell). SDK releases before 17.3.0 cannot decode CAP-84 muxed contract (W...) addresses, so XDR carrying them failed to parse after the upgrade.
+
+## 0.21.0
+
+### Minor Changes
+
+- 3265995: Upgrade `@stellar/stellar-sdk` to v17 (Stellar Protocol 28). The plugin now parses and validates CAP-71 `SOROBAN_CREDENTIALS_ADDRESS_V2` auth entries, introduced in Protocol 27 and emitted by default by `@stellar/stellar-sdk` v17 clients. Previously such entries were rejected with `Invalid func or auth encoding`, and v2 auth entries returned by RPC simulation failed to parse. Legacy `SOROBAN_CREDENTIALS_ADDRESS` (v1) entries continue to be accepted; the plugin does not enforce a v1 cutoff. The auth expiry check (`AUTH_EXPIRY_TOO_SHORT`) now covers all address credential variants, including `SOROBAN_CREDENTIALS_ADDRESS_WITH_DELEGATES`.
+
+## 0.20.0
+
+### Minor Changes
+
+- 59e9af2: feat: Add support to define config at fund relayer level (#115)
+
 ## 0.19.0
 
 ### Minor Changes

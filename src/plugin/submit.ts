@@ -41,7 +41,7 @@ export async function signWithChannelAndFund(
   _fundAddress: string,
   networkPassphrase: string
 ): Promise<Transaction> {
-  const txXdr = transaction.toXDR();
+  const txXdr = transaction.toXdr();
   console.debug(`[channels] Signing transaction with channel (${channelAddress})`);
 
   // Get signatures from both accounts sequentially
@@ -216,15 +216,16 @@ export function decodeTransactionResult(reason: string): DecodedTransactionResul
   try {
     const match = reason.match(/([A-Za-z0-9+/=]{20,})$/);
     if (!match) return null;
-    const result = xdr.TransactionResult.fromXDR(match[1], 'base64');
-    const outerResultCode = String(result.result().switch().name);
-    let resultCode = outerResultCode;
+    const result = xdr.TransactionResult.fromXdr(match[1], 'base64');
+    const outerResultCode = result.result.type;
+    let resultCode: string = outerResultCode;
 
     // Unwrap fee bump inner failure to get the actual result code
     if (outerResultCode === 'txFeeBumpInnerFailed') {
       try {
-        const innerResult = result.result().innerResultPair().result();
-        const innerResultCode = String(innerResult.result().switch().name);
+        const outer = result.result;
+        if (outer.type !== 'txFeeBumpInnerFailed') throw new Error('unreachable');
+        const innerResultCode = outer.innerResultPair.result.result.type;
         resultCode = `${outerResultCode}:${innerResultCode}`;
       } catch {
         // keep outer result code if unwrap fails
@@ -232,7 +233,7 @@ export function decodeTransactionResult(reason: string): DecodedTransactionResul
     }
 
     return {
-      feeCharged: Number(result.feeCharged().toBigInt()),
+      feeCharged: Number(result.feeCharged),
       resultCode,
     };
   } catch {

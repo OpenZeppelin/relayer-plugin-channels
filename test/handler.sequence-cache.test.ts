@@ -50,7 +50,7 @@ vi.mock('../src/plugin/simulation', () => ({
     rawSimResult: { id: '1', results: [{ auth: ['a'], xdr: 'AAAA' }] },
   }),
   buildWithChannel: vi.fn().mockReturnValue({
-    toXDR: () => 'built-xdr',
+    toXdr: () => 'built-xdr',
     toEnvelope: () => ({
       v1: () => ({
         tx: () => ({
@@ -79,7 +79,7 @@ vi.mock('../src/plugin/submit', async (importOriginal) => {
   return {
     ...original,
     signWithChannelAndFund: vi.fn().mockImplementation((_tx: any) => ({
-      toXDR: () => 'signed-xdr',
+      toXdr: () => 'signed-xdr',
       toEnvelope: () => ({
         v1: () => ({
           tx: () => ({

@@ -21,11 +21,14 @@ export interface InclusionFees {
  */
 export function getContractIdFromFunc(func: xdr.HostFunction): string | undefined {
   try {
-    if (func.switch() !== xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
+    if (func.type !== 'hostFunctionTypeInvokeContract') {
       return undefined;
     }
-    const invokeContract = func.invokeContract();
-    return StrKey.encodeContract(invokeContract.contractAddress().contractId() as unknown as Buffer);
+    const contractAddress = func.invokeContract.contractAddress;
+    if (contractAddress.type !== 'scAddressTypeContract') {
+      return undefined;
+    }
+    return StrKey.encodeContract(contractAddress.contractId.toBytes());
   } catch {
     return undefined;
   }
@@ -55,14 +58,19 @@ function getInclusionFee(contractId: string | undefined, limitedContracts: Set<s
   return fees.inclusionFeeDefault;
 }
 
+/**
+ * Compute the maximum fee (in stroops) for a transaction: the Soroban resource
+ * fee declared in the envelope's sorobanData (0 for classic transactions) plus
+ * the inclusion fee, which is higher when the invoked contract is rate-limited.
+ */
 export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<string>, fees: InclusionFees): number {
   const envelope = transaction.toEnvelope();
 
   let resourceFee = 0n;
-  if (envelope.switch() === xdr.EnvelopeType.envelopeTypeTx()) {
-    const sorobanData = envelope.v1().tx().ext().sorobanData();
-    if (sorobanData) {
-      resourceFee = sorobanData.resourceFee().toBigInt();
+  if (envelope.type === 'envelopeTypeTx') {
+    const ext = envelope.v1.tx.ext;
+    if (ext.type === 'sorobanData') {
+      resourceFee = ext.sorobanData.resourceFee;
     }
   }
 

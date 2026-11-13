@@ -70,11 +70,11 @@ vi.mock('../src/plugin/submit', () => ({
   }),
 }));
 
-// Mock tx validation — return an object with toXDR
+// Mock tx validation — return an object with toXdr
 vi.mock('../src/plugin/tx', () => ({
   validateExistingTransactionForSubmitOnly: vi.fn().mockImplementation(() => ({
     fee: '100',
-    toXDR: () => 'MOCK_XDR',
+    toXdr: () => 'MOCK_XDR',
     toEnvelope: () => ({ v1: () => ({ tx: () => ({ operations: () => [] }) }) }),
   })),
 }));
@@ -123,26 +123,27 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
       this.signatures = xdr === 'UNSIGNED_XDR' ? [] : [{ hint: () => Buffer.from('hint') }];
       this.operations = [{ type: 'invokeHostFunction' }];
     }
-    toXDR() {
+    toXdr() {
       return 'MOCK_XDR';
     }
     toEnvelope() {
       return {
-        v1: () => ({
-          tx: () => ({
-            operations: () => [
+        type: 'envelopeTypeTx',
+        v1: {
+          tx: {
+            operations: [
               {
-                body: () => ({
-                  switch: () => actual.xdr.OperationType.invokeHostFunction(),
-                  invokeHostFunctionOp: () => ({
-                    hostFunction: () => ({ switch: () => ({ value: 0 }) }),
-                    auth: () => [],
-                  }),
-                }),
+                body: {
+                  type: 'invokeHostFunction',
+                  invokeHostFunctionOp: {
+                    hostFunction: { type: 'hostFunctionTypeInvokeContract' },
+                    auth: [],
+                  },
+                },
               },
             ],
-          }),
-        }),
+          },
+        },
       };
     }
   }
@@ -212,7 +213,7 @@ describe('alternative fund relayer selection', () => {
     });
     (buildWithChannel as any).mockReturnValue({
       fee: '100',
-      toXDR: () => 'BUILT_XDR',
+      toXdr: () => 'BUILT_XDR',
       signatures: [{ hint: () => Buffer.alloc(4) }],
       operations: [{ type: 'invokeHostFunction' }],
     });

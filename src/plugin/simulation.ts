@@ -69,7 +69,7 @@ export async function simulateTransaction(
       id: Math.floor(Math.random() * 1e8).toString(),
       method: 'simulateTransaction',
       // Enforce mode validates auth entry signatures during simulation.
-      params: { transaction: transaction.toXDR(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
+      params: { transaction: transaction.toXdr(), authMode: SIMULATION.SIMULATION_AUTH_MODE },
     });
   } catch (err: any) {
     throw pluginError('Simulation network request failed', {
@@ -112,8 +112,8 @@ export async function simulateTransaction(
   let hasReadWrite = false;
   if (simResult.transactionData) {
     try {
-      const sorobanData = xdr.SorobanTransactionData.fromXDR(simResult.transactionData, 'base64');
-      hasReadWrite = sorobanData.resources().footprint().readWrite().length > 0;
+      const sorobanData = xdr.SorobanTransactionData.fromXdr(simResult.transactionData, 'base64');
+      hasReadWrite = sorobanData.resources.footprint.readWrite.length > 0;
     } catch {
       // If we can't parse transactionData, treat as not read-only (safe fallback)
       hasReadWrite = true;
@@ -157,7 +157,7 @@ export function buildWithChannel(
   // Parse sorobanData from the simulation result
   let sorobanData: xdr.SorobanTransactionData;
   try {
-    sorobanData = xdr.SorobanTransactionData.fromXDR(simResult.transactionData, 'base64');
+    sorobanData = xdr.SorobanTransactionData.fromXdr(simResult.transactionData, 'base64');
   } catch (err: any) {
     throw pluginError('Failed to parse simulation transactionData', {
       code: 'SIMULATION_INVALID_RESPONSE',
@@ -173,7 +173,7 @@ export function buildWithChannel(
   } else {
     try {
       resolvedAuth = (simResult.results?.[0]?.auth ?? []).map((a: string) =>
-        xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
+        xdr.SorobanAuthorizationEntry.fromXdr(a, 'base64')
       );
     } catch (err: any) {
       throw pluginError('Failed to parse simulation auth entries', {
@@ -228,7 +228,9 @@ export function buildWithChannel(
     .build();
 
   try {
-    const resourceFee = transaction.toEnvelope().v1().tx().ext().sorobanData()?.resourceFee();
+    const envelope = transaction.toEnvelope();
+    const ext = envelope.type === 'envelopeTypeTx' ? envelope.v1.tx.ext : undefined;
+    const resourceFee = ext?.type === 'sorobanData' ? ext.sorobanData.resourceFee : undefined;
     console.debug(`[channels] Assembly complete: fee=${transaction.fee}, resourceFee=${resourceFee}`);
     return transaction;
   } catch (err: any) {
@@ -240,6 +242,29 @@ export function buildWithChannel(
         message: err instanceof Error ? err.message : String(err),
       },
     });
+  }
+}
+
+/**
+ * Return the signatureExpirationLedger of an address-credentialed auth entry,
+ * or undefined for source-account credentials (which carry no expiry).
+ *
+ * Reads the expiry directly off the credential arm so every variant is covered
+ * with an exhaustive switch: legacy `sorobanCredentialsAddress`, CAP-71
+ * `sorobanCredentialsAddressV2` (introduced in Protocol 27, the stellar-sdk v17
+ * default) and `sorobanCredentialsAddressWithDelegates`.
+ */
+export function getAddressCredentialExpiry(entry: xdr.SorobanAuthorizationEntry): number | undefined {
+  const creds = entry.credentials;
+  switch (creds.type) {
+    case 'sorobanCredentialsSourceAccount':
+      return undefined;
+    case 'sorobanCredentialsAddress':
+      return creds.address.signatureExpirationLedger;
+    case 'sorobanCredentialsAddressV2':
+      return creds.addressV2.signatureExpirationLedger;
+    case 'sorobanCredentialsAddressWithDelegates':
+      return creds.addressWithDelegates.addressCredentials.signatureExpirationLedger;
   }
 }
 
@@ -256,12 +281,11 @@ function validateAuthExpiry(
   if (!authEntries?.length) return;
 
   for (const entry of authEntries) {
-    const creds = entry.credentials();
-    if (creds.switch() !== xdr.SorobanCredentialsType.sorobanCredentialsAddress()) {
+    const expiry = getAddressCredentialExpiry(entry);
+    if (expiry === undefined) {
       continue;
     }
 
-    const expiry = creds.address().signatureExpirationLedger();
     const margin = expiry - latestLedger;
 
     if (margin < minBuffer) {
