@@ -4,17 +4,43 @@
  * Transaction validation helpers for the XDR submit-only path.
  */
 
-import { Transaction } from '@stellar/stellar-sdk';
+import { FeeBumpTransaction, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
 import type { ChannelAccountsConfig } from './config';
 import { HTTP_STATUS } from './constants';
+
+/**
+ * Parse a client-supplied transaction envelope. Malformed XDR and fee-bump
+ * envelopes are client errors, so they are rejected here with a 400 instead
+ * of surfacing the SDK's exception as an internal error.
+ */
+export function parseTransactionXdr(xdrStr: string, networkPassphrase: string): Transaction {
+  let parsed: Transaction | FeeBumpTransaction;
+  try {
+    parsed = TransactionBuilder.fromXDR(xdrStr, networkPassphrase);
+  } catch (e) {
+    throw pluginError('`xdr` is not a valid base64 transaction envelope', {
+      code: 'INVALID_XDR',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: { message: e instanceof Error ? e.message : String(e) },
+    });
+  }
+  if (parsed instanceof FeeBumpTransaction) {
+    throw pluginError('Input must be a regular transaction envelope (fee-bump not allowed)', {
+      code: 'INVALID_ENVELOPE_TYPE',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
+  return parsed;
+}
 
 /**
  * Validate a client-built transaction for the XDR submit-only path.
  *
  * Rejects fee-bump envelopes, Soroban transactions whose fee exceeds the
  * declared resource fee plus the base inclusion fee, and a `timeBounds.maxTime`
- * that is already in the past or further out than the configured maximum offset.
+ * that is missing, already in the past or further out than the configured
+ * maximum offset.
  */
 export function validateExistingTransactionForSubmitOnly(
   tx: Transaction,
@@ -45,27 +71,32 @@ export function validateExistingTransactionForSubmitOnly(
     }
   }
 
-  // Time bounds sanity
-  if (tx.timeBounds?.maxTime && Number(tx.timeBounds.maxTime) > 0) {
-    const maxTime = Number(tx.timeBounds.maxTime);
+  // Time bounds: a sponsored transaction must expire. One without `maxTime` stays valid
+  // forever and would also skip the offset limit below.
+  const maxTime = Number(tx.timeBounds?.maxTime ?? 0);
+  if (!(maxTime > 0)) {
+    throw pluginError('Transaction must set `timeBounds.maxTime`', {
+      code: 'TIMEBOUNDS_MISSING',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
 
-    if (maxTime < now) {
-      throw pluginError('Transaction has expired: `timeBounds.maxTime` is in the past', {
-        code: 'TIMEBOUNDS_EXPIRED',
+  if (maxTime < now) {
+    throw pluginError('Transaction has expired: `timeBounds.maxTime` is in the past', {
+      code: 'TIMEBOUNDS_EXPIRED',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: { maxTime, now },
+    });
+  }
+
+  if (maxTime - now > maxTimeBoundOffsetSeconds) {
+    throw pluginError(
+      `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${maxTimeBoundOffsetSeconds} seconds`,
+      {
+        code: 'TIMEBOUNDS_TOO_FAR',
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { maxTime, now },
-      });
-    }
-
-    if (maxTime - now > maxTimeBoundOffsetSeconds) {
-      throw pluginError(
-        `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${maxTimeBoundOffsetSeconds} seconds`,
-        {
-          code: 'TIMEBOUNDS_TOO_FAR',
-          status: HTTP_STATUS.BAD_REQUEST,
-        }
-      );
-    }
+      }
+    );
   }
 
   return tx;

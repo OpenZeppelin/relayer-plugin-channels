@@ -6,7 +6,7 @@
 
 import { BASE_FEE, Networks, StrKey } from '@stellar/stellar-sdk';
 import { pluginError } from '@openzeppelin/relayer-sdk';
-import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE } from './constants';
+import { HTTP_STATUS, CONFIG, TIMEOUT, POLLING, TIME, DYNAMIC_FEE, FEE } from './constants';
 
 // Default inclusion fees (matching launchtube)
 const DEFAULT_INCLUSION_FEE_DEFAULT = Number(BASE_FEE) * 2 + DYNAMIC_FEE.FEE_BUMP_MARGIN_DEFAULT; // 203
@@ -21,6 +21,8 @@ export interface ChannelAccountsConfig {
   adminSecret?: string;
   feeLimit?: number;
   feeResetPeriodMs?: number;
+  /** Highest fee bid (max_fee, in stroops) the fund relayer makes for one transaction */
+  maxTransactionFee: number;
   apiKeyHeader: string;
   limitedContracts: Set<string>;
   contractCapacityRatio: number;
@@ -63,10 +65,32 @@ function parseLockTtl(): number {
 }
 
 function parseFeeLimit(): number | undefined {
-  const raw = process.env.FEE_LIMIT;
-  if (!raw) return undefined;
+  const raw = parseOptionalString('FEE_LIMIT');
+  if (raw === undefined) return undefined;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+  // Falling back to "no limit" here would silently remove the spend cap
+  if (!Number.isFinite(n) || n < 0) {
+    throw pluginError('FEE_LIMIT must be a non-negative number of stroops', {
+      code: 'CONFIG_INVALID',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+      details: { name: 'FEE_LIMIT' },
+    });
+  }
+  return Math.floor(n);
+}
+
+function parseMaxTransactionFee(): number {
+  const raw = parseOptionalString('MAX_TRANSACTION_FEE');
+  if (raw === undefined) return FEE.DEFAULT_MAX_TRANSACTION_FEE;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) {
+    throw pluginError('MAX_TRANSACTION_FEE must be a positive number of stroops', {
+      code: 'CONFIG_INVALID',
+      status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
+      details: { name: 'MAX_TRANSACTION_FEE' },
+    });
+  }
+  return Math.floor(n);
 }
 
 function parseFeeResetPeriod(): number | undefined {
@@ -192,6 +216,7 @@ export function loadConfig(): ChannelAccountsConfig {
     adminSecret: parseOptionalString('PLUGIN_ADMIN_SECRET'),
     feeLimit: parseFeeLimit(),
     feeResetPeriodMs: parseFeeResetPeriod(),
+    maxTransactionFee: parseMaxTransactionFee(),
     apiKeyHeader: parseApiKeyHeader(),
     limitedContracts: parseLimitedContracts(),
     contractCapacityRatio: parseContractCapacityRatio(),

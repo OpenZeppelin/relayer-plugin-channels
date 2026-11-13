@@ -9,6 +9,7 @@ export const HTTP_STATUS = {
   BAD_REQUEST: 400,
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
+  NOT_FOUND: 404,
   CONFLICT: 409,
   TOO_MANY_REQUESTS: 429,
   INTERNAL_SERVER_ERROR: 500,
@@ -76,6 +77,8 @@ export const POLLING = {
 export const FEE = {
   // For non-Soroban txs: 100,000 stroops (0.01 XLM) per Stellar best practice
   NON_SOROBAN_FEE: 100_000,
+  // Default cap on the fee bid (max_fee) for one transaction: 10 XLM
+  DEFAULT_MAX_TRANSACTION_FEE: 100_000_000,
 } as const;
 
 // Dynamic fee estimation defaults
