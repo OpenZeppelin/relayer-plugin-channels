@@ -47,4 +47,9 @@ describe('tx validation', () => {
     const tx = new TransactionBuilder(acc, { fee: '100', networkPassphrase: passphrase }).setTimeout(90).build();
     expect(() => validateExistingTransactionForSubmitOnly(tx, config)).toThrow('too far into the future');
   });
+
+  test('throws on missing maxTime (zero timebounds)', () => {
+    const tx = buildTxWithTimeBounds(passphrase, 0, 0);
+    expect(() => validateExistingTransactionForSubmitOnly(tx, config)).toThrow('must set `timeBounds.maxTime`');
+  });
 });

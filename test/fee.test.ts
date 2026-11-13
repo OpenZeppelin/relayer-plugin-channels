@@ -103,6 +103,21 @@ describe('fee', () => {
     });
   });
 
+  describe('resourceFee cap', () => {
+    test('rejects resourceFee exceeding cap', () => {
+      const hugeResourceFee = 500_000_001n;
+      const tx = buildSorobanTxWithResourceFee(hugeResourceFee);
+      expect(() => calculateMaxFee(tx, new Set(), DEFAULT_FEES)).toThrow('RESOURCE_FEE_TOO_HIGH');
+    });
+
+    test('allows resourceFee at cap', () => {
+      const maxResourceFee = 500_000_000n;
+      const tx = buildSorobanTxWithResourceFee(maxResourceFee);
+      const fee = calculateMaxFee(tx, new Set(), DEFAULT_FEES);
+      expect(fee).toBe(Number(maxResourceFee) + DEFAULT_FEES.inclusionFeeDefault);
+    });
+  });
+
   describe('custom inclusion fees via env override', () => {
     test('uses custom inclusion fees when provided', () => {
       const customFees: InclusionFees = {

@@ -45,27 +45,31 @@ export function validateExistingTransactionForSubmitOnly(
     }
   }
 
-  // Time bounds sanity
-  if (tx.timeBounds?.maxTime && Number(tx.timeBounds.maxTime) > 0) {
-    const maxTime = Number(tx.timeBounds.maxTime);
+  // Time bounds: require maxTime to be set and valid for sponsored transactions
+  const maxTimeRaw = tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0;
+  if (!maxTimeRaw || maxTimeRaw === 0) {
+    throw pluginError('Transaction must set `timeBounds.maxTime` to prevent indefinite channel lock', {
+      code: 'TIMEBOUNDS_MISSING',
+      status: HTTP_STATUS.BAD_REQUEST,
+    });
+  }
 
-    if (maxTime < now) {
-      throw pluginError('Transaction has expired: `timeBounds.maxTime` is in the past', {
-        code: 'TIMEBOUNDS_EXPIRED',
+  if (maxTimeRaw < now) {
+    throw pluginError('Transaction has expired: `timeBounds.maxTime` is in the past', {
+      code: 'TIMEBOUNDS_EXPIRED',
+      status: HTTP_STATUS.BAD_REQUEST,
+      details: { maxTime: maxTimeRaw, now },
+    });
+  }
+
+  if (maxTimeRaw - now > maxTimeBoundOffsetSeconds) {
+    throw pluginError(
+      `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${maxTimeBoundOffsetSeconds} seconds`,
+      {
+        code: 'TIMEBOUNDS_TOO_FAR',
         status: HTTP_STATUS.BAD_REQUEST,
-        details: { maxTime, now },
-      });
-    }
-
-    if (maxTime - now > maxTimeBoundOffsetSeconds) {
-      throw pluginError(
-        `Transaction \`timeBounds.maxTime\` too far into the future. Must be no greater than ${maxTimeBoundOffsetSeconds} seconds`,
-        {
-          code: 'TIMEBOUNDS_TOO_FAR',
-          status: HTTP_STATUS.BAD_REQUEST,
-        }
-      );
-    }
+      }
+    );
   }
 
   return tx;

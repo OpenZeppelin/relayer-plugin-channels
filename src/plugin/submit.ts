@@ -132,12 +132,13 @@ export async function submitWithFeeBumpAndWait(
 
     // Check if transaction actually succeeded
     if (final.status === 'failed') {
-      // Record fee on on-chain failure (transaction was still submitted and consumed fees)
-      if (tracker) {
-        await tracker.recordUsage(maxFee);
-      }
+      // Record actual fee charged on-chain (falls back to maxFee if unavailable)
       const rawReason = final.status_reason || 'Transaction failed';
       const decoded = decodeTransactionResult(rawReason);
+      if (tracker) {
+        const actualFee = decoded?.feeCharged && decoded.feeCharged > 0 ? decoded.feeCharged : maxFee;
+        await tracker.recordUsage(actualFee);
+      }
       const labUrl = final.hash ? buildStellarLabTransactionUrl(network, final.hash) : null;
       const contractType = context?.isLimited ? 'limited' : 'default';
       const base = `[channels] Transaction failed: contractId=${context?.contractId ?? 'unknown'}, contractType=${contractType}, maxFee=${maxFee}`;
@@ -168,9 +169,12 @@ export async function submitWithFeeBumpAndWait(
       });
     }
 
-    // Record fee on success
+    // Record actual fee charged (from the on-chain result), falling back to maxFee
     if (tracker) {
-      await tracker.recordUsage(maxFee);
+      const rawReason = final.status_reason ?? '';
+      const decoded = decodeTransactionResult(rawReason);
+      const actualFee = decoded?.feeCharged && decoded.feeCharged > 0 ? decoded.feeCharged : maxFee;
+      await tracker.recordUsage(actualFee);
     }
 
     return {
