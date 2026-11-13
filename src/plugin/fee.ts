@@ -9,7 +9,11 @@
  */
 
 import { Transaction, xdr, StrKey, Operation } from '@stellar/stellar-sdk';
-import { FEE } from './constants';
+import { pluginError } from '@openzeppelin/relayer-sdk';
+import { FEE, HTTP_STATUS } from './constants';
+
+// 50 XLM cap on resource fees to prevent abuse via inflated resourceFee
+const MAX_RESOURCE_FEE_STROOPS = 500_000_000n;
 
 export interface InclusionFees {
   inclusionFeeDefault: number;
@@ -71,6 +75,16 @@ export function calculateMaxFee(transaction: Transaction, limitedContracts: Set<
     const ext = envelope.v1.tx.ext;
     if (ext.type === 'sorobanData') {
       resourceFee = ext.sorobanData.resourceFee;
+      if (resourceFee > MAX_RESOURCE_FEE_STROOPS) {
+        throw pluginError(
+          `Declared resourceFee (${resourceFee} stroops) exceeds maximum allowed (${MAX_RESOURCE_FEE_STROOPS} stroops)`,
+          {
+            code: 'RESOURCE_FEE_TOO_HIGH',
+            status: HTTP_STATUS.BAD_REQUEST,
+            details: { resourceFee: resourceFee.toString(), max: MAX_RESOURCE_FEE_STROOPS.toString() },
+          }
+        );
+      }
     }
   }
 
